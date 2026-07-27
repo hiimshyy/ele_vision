@@ -264,7 +264,16 @@ class VideoPipeline:
                 f"Connecting to camera: {self._config.url} (attempt {attempts})"
             )
 
-            self._capture = cv2.VideoCapture(source)
+            # Set connection timeout before opening
+            timeout_ms = int(self._config.connection_timeout * 1000)
+            self._capture = cv2.VideoCapture(
+                source,
+                cv2.CAP_ANY,
+                [
+                    cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout_ms,
+                    cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout_ms,
+                ],
+            )
 
             if self._capture.isOpened():
                 logger.info("Camera connected successfully")

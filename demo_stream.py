@@ -41,11 +41,15 @@ class VideoDisplay:
         self._scale = scale
         self._latest_frame: np.ndarray | None = None
         self._frame_id = 0
+        self._frame_timestamp: float = 0.0
+        self._latency: float = 0.0
 
     def on_frame(self, frame: np.ndarray, frame_id: int, timestamp: float) -> None:
         """Callback: receives frames from pipeline."""
         self._latest_frame = frame.copy()
         self._frame_id = frame_id
+        self._frame_timestamp = timestamp
+        self._latency = time.time() - timestamp
 
     def run(self) -> None:
         """Main display loop."""
@@ -96,20 +100,26 @@ class VideoDisplay:
         """Draw stats overlay on frame."""
         stats = self._pipeline.stats
         state = self._pipeline.state.value
+        h, w = frame.shape[:2]
+
+        # Format timestamp
+        from datetime import datetime
+        ts_str = datetime.fromtimestamp(self._frame_timestamp).strftime("%H:%M:%S.%f")[:-3] if self._frame_timestamp > 0 else "--:--:--"
 
         # Semi-transparent background for text
         overlay = frame.copy()
-        cv2.rectangle(overlay, (10, 10), (400, 130), (0, 0, 0), -1)
+        cv2.rectangle(overlay, (10, 10), (420, 160), (0, 0, 0), -1)
         frame = cv2.addWeighted(overlay, 0.6, frame, 0.4, 0)
 
         # Draw stats
         y = 35
         color = (0, 255, 0) if state == "running" else (0, 255, 255)
         texts = [
-            f"State: {state}",
-            f"Frame: #{self._frame_id}",
-            f"Capture FPS: {stats.current_capture_fps:.1f} | Distribute FPS: {stats.current_distribute_fps:.1f}",
-            f"Dropped: {stats.frames_dropped} | Reconnects: {stats.reconnect_count}",
+            f"FPS: {stats.current_distribute_fps:.1f} (capture: {stats.current_capture_fps:.1f})",
+            f"Resolution: {w}x{h}",
+            f"Timestamp: {ts_str}",
+            f"Latency: {self._latency*1000:.1f} ms",
+            f"Frame: #{self._frame_id} | Dropped: {stats.frames_dropped} | Reconnects: {stats.reconnect_count}",
         ]
 
         for text in texts:

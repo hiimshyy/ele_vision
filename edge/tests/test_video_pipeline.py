@@ -61,7 +61,8 @@ def make_fake_frame(width=640, height=480):
 class MockVideoCapture:
     """Mock cv2.VideoCapture that produces fake frames."""
 
-    def __init__(self, url, frames_to_produce=50, fail_after=None):
+    def __init__(self, url=None, apiPreference=None, params=None,
+                 frames_to_produce=50, fail_after=None):
         self._url = url
         self._opened = True
         self._frame_count = 0
@@ -96,7 +97,7 @@ class MockVideoCapture:
 class FailingVideoCapture:
     """Mock cv2.VideoCapture that fails to open."""
 
-    def __init__(self, url):
+    def __init__(self, url=None, apiPreference=None, params=None):
         self._url = url
 
     def isOpened(self):
@@ -124,7 +125,7 @@ class TestPipelineLifecycle:
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_start_moves_to_running(self, mock_cv2, pipeline):
         """Starting with successful connection should reach RUNNING."""
-        mock_cv2.side_effect = lambda url: MockVideoCapture(url, frames_to_produce=500)
+        mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=500)
 
         pipeline.start()
         time.sleep(0.5)  # Give capture thread time to connect
@@ -137,7 +138,7 @@ class TestPipelineLifecycle:
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_stop_terminates_threads(self, mock_cv2, pipeline):
         """Stop should terminate capture and distribute threads."""
-        mock_cv2.side_effect = lambda url: MockVideoCapture(url, frames_to_produce=5000)
+        mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=5000)
 
         pipeline.start()
         time.sleep(0.3)
@@ -150,7 +151,7 @@ class TestPipelineLifecycle:
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_double_start_ignored(self, mock_cv2, pipeline):
         """Calling start twice should not create extra threads."""
-        mock_cv2.side_effect = lambda url: MockVideoCapture(url, frames_to_produce=5000)
+        mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=5000)
 
         pipeline.start()
         time.sleep(0.3)
@@ -194,7 +195,7 @@ class TestFrameCallbacks:
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_callback_receives_frames(self, mock_cv2, pipeline):
         """Registered callback should receive frames."""
-        mock_cv2.side_effect = lambda url: MockVideoCapture(url, frames_to_produce=500)
+        mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=500)
 
         received_frames = []
 
@@ -217,7 +218,7 @@ class TestFrameCallbacks:
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_callback_error_does_not_crash_pipeline(self, mock_cv2, pipeline):
         """A failing callback should not crash the pipeline."""
-        mock_cv2.side_effect = lambda url: MockVideoCapture(url, frames_to_produce=500)
+        mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=500)
 
         call_count = {"good": 0}
 
@@ -240,7 +241,7 @@ class TestFrameCallbacks:
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_multiple_callbacks_all_invoked(self, mock_cv2, pipeline):
         """All registered callbacks should receive each frame."""
-        mock_cv2.side_effect = lambda url: MockVideoCapture(url, frames_to_produce=500)
+        mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=500)
 
         counts = {"a": 0, "b": 0, "c": 0}
 
@@ -285,7 +286,7 @@ class TestFPSThrottling:
             reconnect_interval=0.1,
             max_reconnect_attempts=0,
         )
-        mock_cv2.side_effect = lambda url: MockVideoCapture(url, frames_to_produce=5000)
+        mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=5000)
 
         pipeline = VideoPipeline(config)
         received = []
@@ -306,7 +307,7 @@ class TestFPSThrottling:
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_stats_track_capture_and_distribute(self, mock_cv2, pipeline):
         """Stats should track both capture and distributed frame counts."""
-        mock_cv2.side_effect = lambda url: MockVideoCapture(url, frames_to_produce=5000)
+        mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=5000)
 
         pipeline.start()
         time.sleep(1.0)
@@ -359,11 +360,11 @@ class TestReconnection:
         # Second connection works indefinitely
         call_count = {"n": 0}
 
-        def create_capture(url):
+        def create_capture(*args, **kwargs):
             call_count["n"] += 1
             if call_count["n"] == 1:
-                return MockVideoCapture(url, fail_after=5)
-            return MockVideoCapture(url, frames_to_produce=5000)
+                return MockVideoCapture(fail_after=5)
+            return MockVideoCapture(frames_to_produce=5000)
 
         mock_cv2.side_effect = create_capture
 
@@ -386,7 +387,7 @@ class TestReconnection:
             reconnect_interval=0.05,
             max_reconnect_attempts=2,
         )
-        mock_cv2.side_effect = lambda url: FailingVideoCapture(url)
+        mock_cv2.side_effect = lambda *args, **kwargs: FailingVideoCapture()
 
         pipeline = VideoPipeline(config)
         pipeline.start()
@@ -412,12 +413,12 @@ class TestReconnection:
 
         attempt_count = {"n": 0}
 
-        def create_capture(url):
+        def create_capture(*args, **kwargs):
             attempt_count["n"] += 1
             # Succeed after 4 attempts
             if attempt_count["n"] >= 4:
-                return MockVideoCapture(url, frames_to_produce=500)
-            return FailingVideoCapture(url)
+                return MockVideoCapture(frames_to_produce=500)
+            return FailingVideoCapture()
 
         mock_cv2.side_effect = create_capture
 
@@ -441,7 +442,7 @@ class TestThreadSafety:
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_register_during_distribution(self, mock_cv2, pipeline):
         """Registering callbacks while pipeline is running should be safe."""
-        mock_cv2.side_effect = lambda url: MockVideoCapture(url, frames_to_produce=5000)
+        mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=5000)
 
         counts = {"late": 0}
 
@@ -461,7 +462,7 @@ class TestThreadSafety:
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_unregister_during_distribution(self, mock_cv2, pipeline):
         """Unregistering callbacks while pipeline is running should be safe."""
-        mock_cv2.side_effect = lambda url: MockVideoCapture(url, frames_to_produce=5000)
+        mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=5000)
 
         counts = {"total": 0}
 

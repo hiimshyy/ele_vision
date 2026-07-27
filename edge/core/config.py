@@ -31,6 +31,9 @@ class CameraConfig(BaseModel):
     max_reconnect_attempts: int = Field(
         default=0, ge=0, description="Max reconnect attempts (0 = infinite)"
     )
+    connection_timeout: float = Field(
+        default=10.0, gt=0.0, description="Timeout in seconds for camera connection"
+    )
 
 
 class MQTTConfig(BaseModel):

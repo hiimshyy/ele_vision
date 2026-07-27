@@ -6,9 +6,10 @@
 camera:
   url: "rtsp://192.168.1.100:554/stream1"
   capture_fps: 25
-  process_fps: 5
+  process_fps: 15
   reconnect_interval: 5.0
   max_reconnect_attempts: 0
+  connection_timeout: 10.0
 
 # --- MQTT Communication ---
 mqtt:

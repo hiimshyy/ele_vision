@@ -6,9 +6,10 @@
 camera:
   url: "rtsp://192.168.1.100:554/stream1"
   capture_fps: 25          # Native camera FPS
-  process_fps: 5           # FPS sent to plugins (lower = less CPU)
+  process_fps: 10          # FPS sent to plugins (lower = less CPU)
   reconnect_interval: 5.0  # Seconds between reconnect attempts
-  max_reconnect_attempts: 0  # 0 = infinite retries
+  max_reconnect_attempts: 10  # 0 = infinite retries
+  connection_timeout: 10.0   # Seconds to wait for camera connection
 
 # --- MQTT Communication ---
 mqtt:
