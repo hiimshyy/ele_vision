@@ -26,7 +26,7 @@ class CameraConfig(BaseModel):
         default=5, ge=1, le=30, description="FPS distributed to plugins"
     )
     reconnect_interval: float = Field(
-        default=5.0, ge=1.0, description="Seconds between reconnection attempts"
+        default=5.0, gt=0.0, description="Seconds between reconnection attempts"
     )
     max_reconnect_attempts: int = Field(
         default=0, ge=0, description="Max reconnect attempts (0 = infinite)"

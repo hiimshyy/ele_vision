@@ -5,7 +5,8 @@ pydantic==2.13.4
 pydantic-settings==2.14.2
 
 # Video Pipeline (Task 2)
-# opencv-python-headless==4.9.0.80
+opencv-python==5.0.0.93
+numpy==2.5.1
 
 # MQTT Communication (Task 10)
 # paho-mqtt==2.0.0
