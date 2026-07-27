@@ -1,0 +1,49 @@
+# Smart Cabin Platform - Edge Configuration
+# Override any value with environment variable: SC_{SECTION}_{KEY}
+# Example: SC_CAMERA_URL=rtsp://192.168.1.100:554/stream
+
+# --- Camera / RTSP Stream ---
+camera:
+  url: "rtsp://192.168.1.100:554/stream1"
+  capture_fps: 25          # Native camera FPS
+  process_fps: 5           # FPS sent to plugins (lower = less CPU)
+  reconnect_interval: 5.0  # Seconds between reconnect attempts
+  max_reconnect_attempts: 0  # 0 = infinite retries
+
+# --- MQTT Communication ---
+mqtt:
+  broker_host: "localhost"
+  broker_port: 1883
+  username: ""
+  password: ""
+  device_id: "cabin-001"
+  keepalive: 60
+
+# --- Plugins ---
+plugins:
+  directory: "edge/plugins"
+  modules:
+    - name: "face_recognition"
+      enabled: true
+      config:
+        detection_threshold: 0.7
+        recognition_threshold: 0.6
+        min_face_size: 80
+        cooldown_seconds: 30
+
+    # Future plugins (disabled by default)
+    # - name: "people_counter"
+    #   enabled: false
+    #   config:
+    #     max_capacity: 10
+
+    # - name: "elevator_control"
+    #   enabled: false
+    #   config:
+    #     default_floor: 1
+
+# --- Logging ---
+logging:
+  level: "INFO"               # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+  file: ""                    # Empty = stdout only, or path like "logs/cabin.log"

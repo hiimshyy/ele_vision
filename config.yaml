@@ -1,0 +1,38 @@
+# Smart Cabin Platform - Root Configuration
+# This is a convenience copy. Primary config is at edge/config.yaml
+# Override any value with environment variable: SC_{SECTION}_{KEY}
+
+# --- Camera / RTSP Stream ---
+camera:
+  url: "rtsp://192.168.1.100:554/stream1"
+  capture_fps: 25
+  process_fps: 5
+  reconnect_interval: 5.0
+  max_reconnect_attempts: 0
+
+# --- MQTT Communication ---
+mqtt:
+  broker_host: "localhost"
+  broker_port: 1883
+  username: ""
+  password: ""
+  device_id: "cabin-001"
+  keepalive: 60
+
+# --- Plugins ---
+plugins:
+  directory: "edge/plugins"
+  modules:
+    - name: "face_recognition"
+      enabled: true
+      config:
+        detection_threshold: 0.7
+        recognition_threshold: 0.6
+        min_face_size: 80
+        cooldown_seconds: 30
+
+# --- Logging ---
+logging:
+  level: "INFO"
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+  file: ""
