@@ -12,7 +12,7 @@ Nền tảng AI cho cabin thang máy, chạy trên Orange Pi 4 Pro với camera 
 
 ## Features (Current)
 
-- **Video Pipeline** — RTSP capture with auto-reconnect, FPS throttling, ring buffer
+- **Video Pipeline** — RTSP capture with auto-reconnect, latest frame buffer, per-callback FPS scheduling
 - **Plugin Architecture** — Extensible module system for AI tasks
 - **Structured Logging** — Loguru, key-value format, module-based log files, periodic system stats
 - **Edge REST API** — FastAPI for remote management
@@ -93,7 +93,7 @@ Log files in `logs/`:
 
 Format (key-value, parseable):
 ```
-2026-07-28 10:00:30.456 | INFO     | camera     | event=periodic_stats | uptime_s=30 | capture_fps=24.8 | distribute_fps=14.9 | cpu_percent=23.5 | ram_used_mb=512 | ram_percent=12.8
+2026-07-28 10:00:30.456 | INFO     | camera     | event=periodic_stats | uptime_s=30 | capture_fps=24.8 | distribute_fps=14.9 | resolution=1920x1080 | decode_ms=8.3 | buffer_latency_ms=12.5 | reconnects=0 | cpu_percent=23.5 | ram_used_mb=512 | ram_percent=12.8
 ```
 
 ## Demo Stream Controls
@@ -108,7 +108,7 @@ Overlay displays: FPS, Resolution, Uptime, Latency, Reconnects
 ## Roadmap
 
 - [x] Task 1: Project structure & Config system
-- [x] Task 2: Video Pipeline (RTSP, auto-reconnect, FPS throttle)
+- [x] Task 2: Video Pipeline (RTSP, auto-reconnect, per-callback FPS scheduler)
 - [ ] Task 3: Event Bus
 - [ ] Task 4: Plugin Manager
 - [ ] Task 5: Face Detection (C++ NCNN)

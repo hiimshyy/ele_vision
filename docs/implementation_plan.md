@@ -42,11 +42,12 @@ Xây dựng một nền tảng Smart Cabin có kiến trúc plugin-based cho tha
 ```mermaid
 graph TB
     subgraph "Edge - Orange Pi 4 Pro"
-        CAM[Camera RTSP] --> VP[Video Pipeline<br/>Python + OpenCV]
-        VP --> PM[Plugin Manager]
-        PM --> FR[Face Recognition<br/>C++ NCNN Engine]
-        PM --> PC[People Counter<br/>Future Module]
-        PM --> EC[Elevator Control<br/>Future Module]
+        CAM[Camera RTSP] --> VP[Video Pipeline<br/>Capture Thread]
+        VP --> LF[Latest Frame Buffer]
+        LF --> FS[Frame Scheduler]
+        FS --> FR[Face Recognition<br/>C++ NCNN Engine<br/>5fps]
+        FS --> PC[People Counter<br/>Future Module<br/>15fps]
+        FS --> EC[Elevator Control<br/>Future Module]
         FR --> EB[Event Bus]
         EB --> MQTT_C[MQTT Client]
         EB --> LS[Local Storage<br/>SQLite Buffer]
@@ -74,18 +75,19 @@ graph TB
 ```mermaid
 graph LR
     subgraph "Core Platform"
-        VP[Video Pipeline] --> FD[Frame Distributor]
-        FD --> |frame| P1[Plugin 1: Face Recognition]
-        FD --> |frame| P2[Plugin 2: People Counter]
-        FD --> |frame| P3[Plugin N: ...]
-
+        VP[Video Pipeline] --> LF[Latest Frame Buffer]
+        LF --> FS[Frame Scheduler]
+        FS --> |5fps| P1[Plugin 1: Face Recognition]
+        FS --> |15fps| P2[Plugin 2: People Counter]
+        FS --> |1fps| P3[Plugin N: Recorder]
+        
         P1 --> EB[Event Bus]
         P2 --> EB
         P3 --> EB
-
+        
         EB --> SYNC[MQTT Publisher]
         EB --> LOG[Local Logger]
-
+        
         CFG[Config Manager] --> VP
         CFG --> P1
         CFG --> P2
@@ -207,17 +209,17 @@ smart-cabin/
 
 **Implementation guidance**:
 - Implement `edge/core/video_pipeline.py` sử dụng OpenCV VideoCapture với RTSP URL
-- Design thread-safe frame buffer (ring buffer) để plugins consume frames không block pipeline
-- Support configurable FPS (capture ở native FPS, distribute ở target FPS để tiết kiệm CPU)
+- Latest frame buffer (1 frame, atomic swap) — không dùng ring buffer, tiết kiệm RAM
+- Frame Scheduler: per-callback FPS control (mỗi plugin register với target FPS riêng)
 - Implement graceful reconnection khi RTSP stream bị ngắt
 - Connection timeout cho RTSP
 - Callback-based frame distribution pattern (observer pattern)
 
 **Test requirements**:
 - Test kết nối RTSP stream (dùng mock hoặc local test stream)
-- Test frame rate throttling (capture 25fps → distribute 15fps)
+- Test per-callback FPS scheduling (callback A ở 5fps, callback B ở 20fps)
 - Test reconnection logic khi stream ngắt
-- Test memory không leak khi chạy lâu (frame buffer bounded)
+- Test memory không leak khi chạy lâu (latest frame buffer bounded)
 
 **Demo**: Chạy video pipeline với camera thực, hiển thị FPS/Resolution/Timestamp/Latency/Reconnects trên overlay.
 
