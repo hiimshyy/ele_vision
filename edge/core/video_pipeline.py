@@ -93,8 +93,13 @@ class ScheduledCallback:
     last_invoked: float = 0.0  # Timestamp of last invocation
     # Error tracking
     consecutive_errors: int = 0
+    total_errors: int = 0
     max_errors: int = 5  # Disable after N consecutive errors
     disabled: bool = False
+    # Performance tracking
+    invocation_count: int = 0
+    total_process_time: float = 0.0  # Total processing time (seconds)
+    missed_deadlines: int = 0  # Times processing took longer than interval
 
 
 # --- Video Pipeline ---
@@ -487,13 +492,21 @@ class VideoPipeline:
 
     def _invoke_callback(self, sc: ScheduledCallback, frame_data: FrameData) -> None:
         """Invoke a single callback in a thread pool worker (non-blocking)."""
+        t_start = time.time()
         try:
             sc.callback(frame_data.frame, frame_data.frame_id, frame_data.timestamp)
             # Reset error count on success
             if sc.consecutive_errors > 0:
                 sc.consecutive_errors = 0
+            # Track performance
+            process_time = time.time() - t_start
+            sc.invocation_count += 1
+            sc.total_process_time += process_time
+            if process_time > sc.interval:
+                sc.missed_deadlines += 1
         except Exception as e:
             sc.consecutive_errors += 1
+            sc.total_errors += 1
             if sc.consecutive_errors >= sc.max_errors:
                 sc.disabled = True
                 sched_logger.warning(
@@ -551,6 +564,31 @@ class VideoPipeline:
                 ram_used=memory.used / (1024 * 1024),
                 ram_pct=memory.percent,
             )
+
+            # Per-plugin stats
+            with self._callbacks_lock:
+                callbacks = list(self._callbacks)
+
+            for sc in callbacks:
+                avg_ms = (
+                    (sc.total_process_time / sc.invocation_count * 1000)
+                    if sc.invocation_count > 0
+                    else 0.0
+                )
+                actual_fps = sc.invocation_count / uptime if uptime > 0 else 0.0
+
+                sched_logger.info(
+                    "event=plugin_stats | plugin={name} | target_fps={tfps} "
+                    "| actual_fps={afps:.1f} | avg_process_ms={avg:.1f} "
+                    "| missed_deadlines={missed} | errors={errors} | disabled={disabled}",
+                    name=sc.callback.__name__,
+                    tfps=sc.target_fps,
+                    afps=actual_fps,
+                    avg=avg_ms,
+                    missed=sc.missed_deadlines,
+                    errors=sc.total_errors,
+                    disabled=sc.disabled,
+                )
 
 
 # --- CLI Demo ---
