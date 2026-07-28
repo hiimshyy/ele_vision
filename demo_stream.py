@@ -15,7 +15,6 @@ Controls:
 """
 
 import argparse
-import logging
 import sys
 import time
 
@@ -24,13 +23,9 @@ import numpy as np
 
 from edge.core.config import CameraConfig, load_config
 from edge.core.video_pipeline import VideoPipeline, PipelineState
-from edge.core.logging_setup import setup_logging
+from edge.core.logging_setup import setup_logging, get_logger
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-logger = logging.getLogger("demo_stream")
+logger = get_logger("system")
 
 
 class VideoDisplay:

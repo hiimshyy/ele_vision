@@ -7,31 +7,33 @@ Captures frames from RTSP stream and distributes them to registered consumers
 - Configurable FPS throttling (capture at native FPS, distribute at lower FPS)
 - Automatic reconnection with backoff on stream failure
 - Observer pattern for frame distribution to multiple consumers
+- Periodic stats logging (FPS, CPU, RAM) every 30s
 """
 
-import logging
+import re
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
 import cv2
 import numpy as np
+import psutil
 
 from edge.core.config import CameraConfig
+from edge.core.logging_setup import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("camera")
 
 
-# --- Types ---
+# --- Helpers ---
 
 
 def _mask_url(url: str) -> str:
     """Mask credentials in RTSP URL for safe logging."""
     # rtsp://user:password@host → rtsp://user:***@host
-    import re
     return re.sub(r"(://[^:]+:)[^@]+(@)", r"\1***\2", url)
 
 # Frame callback signature: (frame: np.ndarray, frame_id: int, timestamp: float) -> None
@@ -135,19 +137,19 @@ class VideoPipeline:
         with self._callbacks_lock:
             if callback not in self._callbacks:
                 self._callbacks.append(callback)
-                logger.info(f"Registered frame callback: {callback.__name__}")
+                logger.info("event=callback_registered | name={name}", name=callback.__name__)
 
     def unregister_callback(self, callback: FrameCallback) -> None:
         """Unregister a frame consumer callback."""
         with self._callbacks_lock:
             if callback in self._callbacks:
                 self._callbacks.remove(callback)
-                logger.info(f"Unregistered frame callback: {callback.__name__}")
+                logger.info("event=callback_unregistered | name={name}", name=callback.__name__)
 
     def start(self) -> None:
         """Start the video pipeline (capture + distribution threads)."""
         if self.state in (PipelineState.RUNNING, PipelineState.CONNECTING):
-            logger.warning("Pipeline already running")
+            logger.warning("event=start_ignored | reason=already_running")
             return
 
         self._stop_event.clear()
@@ -166,17 +168,28 @@ class VideoPipeline:
             name="video-distribute",
             daemon=True,
         )
+        self._stats_thread = threading.Thread(
+            target=self._stats_loop,
+            name="video-stats",
+            daemon=True,
+        )
 
         self._capture_thread.start()
         self._distribute_thread.start()
-        logger.info(f"Video pipeline started: {_mask_url(self._config.url)}")
+        self._stats_thread.start()
+        logger.info(
+            "event=pipeline_started | url={url} | capture_fps={cfps} | process_fps={pfps}",
+            url=_mask_url(self._config.url),
+            cfps=self._config.capture_fps,
+            pfps=self._config.process_fps,
+        )
 
     def stop(self) -> None:
         """Stop the video pipeline gracefully."""
         if self.state == PipelineState.STOPPED:
             return
 
-        logger.info("Stopping video pipeline...")
+        logger.info("event=pipeline_stopping")
         self._stop_event.set()
         self._buffer_event.set()  # Wake up distributor if waiting
 
@@ -190,10 +203,13 @@ class VideoPipeline:
         self._set_state(PipelineState.STOPPED)
         uptime = time.time() - self._stats.start_time if self._stats.start_time > 0 else 0
         logger.info(
-            f"Video pipeline stopped (uptime: {uptime:.1f}s, "
-            f"captured: {self._stats.frames_captured}, "
-            f"distributed: {self._stats.frames_distributed}, "
-            f"reconnects: {self._stats.reconnect_count})"
+            "event=pipeline_stopped | uptime_s={uptime:.1f} | captured={captured} "
+            "| distributed={distributed} | dropped={dropped} | reconnects={reconnects}",
+            uptime=uptime,
+            captured=self._stats.frames_captured,
+            distributed=self._stats.frames_distributed,
+            dropped=self._stats.frames_dropped,
+            reconnects=self._stats.reconnect_count,
         )
 
     def _set_state(self, new_state: PipelineState) -> None:
@@ -202,7 +218,10 @@ class VideoPipeline:
             old_state = self._state
             self._state = new_state
             if old_state != new_state:
-                logger.debug(f"Pipeline state: {old_state} -> {new_state}")
+                logger.debug(
+                    "event=state_change | from={old} | to={new}",
+                    old=old_state.value, new=new_state.value,
+                )
 
     # --- Capture Thread ---
 
@@ -227,8 +246,8 @@ class VideoPipeline:
                 if not ret:
                     uptime = time.time() - self._stats.start_time
                     logger.warning(
-                        f"Frame read failed, attempting reconnection "
-                        f"(uptime: {uptime:.1f}s, frames_captured: {self._stats.frames_captured})"
+                        "event=stream_lost | uptime_s={uptime:.1f} | frames_captured={fc}",
+                        uptime=uptime, fc=self._stats.frames_captured,
                     )
                     self._release_capture()
                     self._set_state(PipelineState.RECONNECTING)
@@ -278,7 +297,8 @@ class VideoPipeline:
             attempts += 1
             self._set_state(PipelineState.CONNECTING)
             logger.info(
-                f"Connecting to camera: {_mask_url(self._config.url)} (attempt {attempts})"
+                "event=connecting | url={url} | attempt={attempt}",
+                url=_mask_url(self._config.url), attempt=attempts,
             )
 
             # Set connection timeout before opening
@@ -293,17 +313,19 @@ class VideoPipeline:
             )
 
             if self._capture.isOpened():
-                logger.info("Camera connected successfully")
+                logger.info("event=connected")
                 return True
 
             self._release_capture()
             logger.warning(
-                f"Connection failed, retrying in {self._config.reconnect_interval}s"
+                "event=connection_failed | retry_in_s={interval}",
+                interval=self._config.reconnect_interval,
             )
 
             if max_attempts > 0 and attempts >= max_attempts:
                 logger.error(
-                    f"Max reconnection attempts ({max_attempts}) reached"
+                    "event=max_reconnects_reached | max_attempts={max}",
+                    max=max_attempts,
                 )
                 self._set_state(PipelineState.ERROR)
                 return False
@@ -384,9 +406,45 @@ class VideoPipeline:
                 callback(frame_data.frame, frame_data.frame_id, frame_data.timestamp)
             except Exception as e:
                 logger.error(
-                    f"Error in frame callback {callback.__name__}: {e}",
-                    exc_info=True,
+                    "event=callback_error | name={name} | error={err}",
+                    name=callback.__name__, err=str(e),
                 )
+
+    # --- Stats Thread ---
+
+    def _stats_loop(self) -> None:
+        """Log periodic stats (FPS, CPU, RAM) every 30 seconds."""
+        stats_interval = 30  # seconds
+
+        while not self._stop_event.is_set():
+            self._stop_event.wait(timeout=stats_interval)
+
+            if self._stop_event.is_set():
+                break
+
+            if self.state != PipelineState.RUNNING:
+                continue
+
+            # Gather system metrics
+            cpu_percent = psutil.cpu_percent(interval=None)
+            memory = psutil.virtual_memory()
+            uptime = time.time() - self._stats.start_time
+
+            logger.info(
+                "event=periodic_stats | uptime_s={uptime:.0f} "
+                "| capture_fps={cfps:.1f} | distribute_fps={dfps:.1f} "
+                "| captured={captured} | distributed={distributed} | dropped={dropped} "
+                "| cpu_percent={cpu:.1f} | ram_used_mb={ram_used:.0f} | ram_percent={ram_pct:.1f}",
+                uptime=uptime,
+                cfps=self._stats.current_capture_fps,
+                dfps=self._stats.current_distribute_fps,
+                captured=self._stats.frames_captured,
+                distributed=self._stats.frames_distributed,
+                dropped=self._stats.frames_dropped,
+                cpu=cpu_percent,
+                ram_used=memory.used / (1024 * 1024),
+                ram_pct=memory.percent,
+            )
 
 
 # --- CLI Demo ---

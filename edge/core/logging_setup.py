@@ -1,62 +1,99 @@
 """
-Smart Cabin Platform - Logging Setup
+Smart Cabin Platform - Logging Setup (Loguru)
 
-Configures structured logging to both console and file.
-Log file includes timestamps for all events (reconnects, errors, start/stop)
-so they can be reviewed later without real-time monitoring.
+Structured logging with:
+- Module-based log files (camera.log, system.log, etc.)
+- Key-value format for easy parsing
+- Console output for development
+- Rotating files (10MB, 5 backups)
 """
 
-import logging
-import os
-from datetime import datetime
+import sys
 from pathlib import Path
 
-from edge.core.config import LoggingConfig
+from loguru import logger
+
+# Remove default loguru handler
+logger.remove()
+
+# Log directory
+LOG_DIR = Path("logs")
 
 
-def setup_logging(config: LoggingConfig) -> None:
+def setup_logging(level: str = "INFO", log_dir: str | Path = "logs") -> None:
     """
-    Configure root logger based on config.
+    Configure loguru logging with module-based files.
 
-    - Always logs to console (stdout)
-    - If config.file is set, also logs to rotating file
-    - Creates log directory if needed
+    Creates separate log files:
+    - camera.log: Video pipeline events
+    - system.log: General system events (start/stop, config, plugins)
+    - all.log: Everything combined
+
+    Args:
+        level: Minimum log level (DEBUG, INFO, WARNING, ERROR)
+        log_dir: Directory for log files
     """
-    level = getattr(logging, config.level.upper(), logging.INFO)
-    fmt = config.format
+    global LOG_DIR
+    LOG_DIR = Path(log_dir)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
+    # Clear existing handlers
+    logger.remove()
 
-    # Clear existing handlers (avoid duplicates on reload)
-    root_logger.handlers.clear()
+    # Key-value format
+    kv_format = (
+        "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | {extra[module]:<10} | {message}"
+    )
 
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(level)
-    console_handler.setFormatter(logging.Formatter(fmt))
-    root_logger.addHandler(console_handler)
+    # Console handler (colored, for development)
+    logger.add(
+        sys.stderr,
+        level=level,
+        format=kv_format,
+        filter=lambda record: record["extra"].get("module", "system"),
+    )
 
-    # File handler (if configured)
-    log_file = config.file
-    if not log_file:
-        # Default log file location
-        log_file = "logs/smart_cabin.log"
-
-    log_path = Path(log_file)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
-    from logging.handlers import RotatingFileHandler
-
-    file_handler = RotatingFileHandler(
-        log_path,
-        maxBytes=10 * 1024 * 1024,  # 10 MB
-        backupCount=5,
+    # All logs combined
+    logger.add(
+        LOG_DIR / "all.log",
+        level=level,
+        format=kv_format,
+        rotation="10 MB",
+        retention=5,
         encoding="utf-8",
     )
-    file_handler.setLevel(level)
-    file_handler.setFormatter(logging.Formatter(fmt))
-    root_logger.addHandler(file_handler)
 
-    logging.info(f"Logging initialized: level={config.level}, file={log_path}")
+    # Camera module log
+    logger.add(
+        LOG_DIR / "camera.log",
+        level=level,
+        format=kv_format,
+        rotation="10 MB",
+        retention=5,
+        encoding="utf-8",
+        filter=lambda record: record["extra"].get("module") == "camera",
+    )
+
+    # System module log
+    logger.add(
+        LOG_DIR / "system.log",
+        level=level,
+        format=kv_format,
+        rotation="10 MB",
+        retention=5,
+        encoding="utf-8",
+        filter=lambda record: record["extra"].get("module") == "system",
+    )
+
+
+def get_logger(module: str):
+    """
+    Get a module-scoped logger.
+
+    Args:
+        module: Module name (e.g., "camera", "system", "face_recognition")
+
+    Returns:
+        Loguru logger bound with module context
+    """
+    return logger.bind(module=module)
