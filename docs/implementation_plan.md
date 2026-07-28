@@ -8,11 +8,13 @@ Xây dựng một nền tảng Smart Cabin có kiến trúc plugin-based cho tha
 
 - **Edge device**: Orange Pi 4 Pro (RK3399, 6-core ARM, Mali-T860 GPU, 4GB RAM, Ubuntu/Debian)
 - **Camera**: RTSP stream có sẵn
-- **Architecture**: Edge + Cloud (self-hosted VPS)
+- **Architecture**: Edge + Cloud (self-hosted)
 - **Stack**: Python orchestration + C++ inference engine
-- **Cloud**: Docker, FastAPI, PostgreSQL
+- **Edge API**: REST API (FastAPI) cho admin operations + MQTT cho realtime events
+- **Cloud**: Do đội dev khác phát triển — chỉ cần cung cấp API spec/protocol
+- **MQTT Broker**: Tự host (trên edge hoặc VPS riêng)
 - **Demo module**: Face Recognition - nhận diện < 50 cư dân, ghi log
-- **Giao diện**: Web dashboard quản trị
+- **Face Enrollment**: Trực tiếp trên Edge (CLI/script)
 - **Extensible**: Plugin architecture cho modules tương lai
 
 ## Background (Research Findings)
@@ -31,7 +33,7 @@ Xây dựng một nền tảng Smart Cabin có kiến trúc plugin-based cho tha
 | Face Embedding | **MobileFaceNet** (từ InsightFace) | 1M params, 99.4% accuracy trên LFW, optimized cho mobile |
 | Inference Framework | **NCNN** (Tencent) | C++ native, tối ưu ARM NEON, không dependency nặng |
 
-**Communication đề xuất**: MQTT cho realtime events (face detected) + REST API cho admin operations (đăng ký face, query logs)
+**Communication đề xuất**: MQTT cho realtime events (face detected) + REST API cho admin operations (query status, manage faces)
 
 ## Proposed Solution
 
@@ -48,17 +50,23 @@ graph TB
         FR --> EB[Event Bus]
         EB --> MQTT_C[MQTT Client]
         EB --> LS[Local Storage<br/>SQLite Buffer]
+        API[Edge REST API<br/>FastAPI] --> FR
+        API --> EB
     end
 
-    subgraph "Cloud - VPS Docker"
-        MQTT_B[MQTT Broker<br/>Mosquitto] --> API[FastAPI Backend]
-        API --> DB[(PostgreSQL)]
-        API --> WEB[Web Dashboard<br/>React/Vue]
-        API --> S3[Face Image Storage<br/>MinIO]
+    subgraph "MQTT Broker (Self-hosted)"
+        MQTT_B[Mosquitto]
+    end
+
+    subgraph "Cloud (Đội dev khác)"
+        CLOUD_API[Cloud Backend]
+        CLOUD_WEB[Web Dashboard]
     end
 
     MQTT_C <-->|Events & Sync| MQTT_B
-    WEB -->|REST API| API
+    CLOUD_API <-->|Subscribe events| MQTT_B
+    CLOUD_API -->|REST calls| API
+    CLOUD_WEB --> CLOUD_API
 ```
 
 ### Kiến trúc Edge (Plugin-based)
@@ -70,19 +78,51 @@ graph LR
         FD --> |frame| P1[Plugin 1: Face Recognition]
         FD --> |frame| P2[Plugin 2: People Counter]
         FD --> |frame| P3[Plugin N: ...]
-        
+
         P1 --> EB[Event Bus]
         P2 --> EB
         P3 --> EB
-        
-        EB --> SYNC[Cloud Sync Service]
+
+        EB --> SYNC[MQTT Publisher]
         EB --> LOG[Local Logger]
-        
+
         CFG[Config Manager] --> VP
         CFG --> P1
         CFG --> P2
+
+        API[Edge REST API] --> P1
+        API --> CFG
+        API --> EB
     end
 ```
+
+### Edge API Design
+
+**REST API** (chạy trên Edge, cho cloud/admin gọi vào):
+
+| Method | Endpoint | Mô tả |
+|--------|----------|--------|
+| GET | `/api/status` | System status, uptime, plugin states |
+| GET | `/api/faces` | Danh sách faces đã đăng ký |
+| GET | `/api/faces/{id}` | Chi tiết 1 face |
+| POST | `/api/faces/enroll` | Đăng ký face mới (upload ảnh) |
+| DELETE | `/api/faces/{id}` | Xóa face |
+| GET | `/api/logs` | Recognition logs (filter by time, person) |
+| GET | `/api/plugins` | Plugin status list |
+| POST | `/api/plugins/{name}/restart` | Restart plugin |
+| GET | `/api/stats` | Pipeline stats (FPS, frames, etc.) |
+
+**MQTT Topics** (Edge publish → Cloud subscribe):
+
+| Topic | Direction | Payload |
+|-------|-----------|---------|
+| `cabin/{device_id}/face/recognized` | Edge → Cloud | `{person_id, person_name, confidence, timestamp, bbox}` |
+| `cabin/{device_id}/face/unknown` | Edge → Cloud | `{confidence, timestamp, bbox}` |
+| `cabin/{device_id}/status/heartbeat` | Edge → Cloud | `{uptime, cpu, memory, fps}` |
+| `cabin/{device_id}/system/error` | Edge → Cloud | `{error_message, error_type, recoverable}` |
+| `cabin/{device_id}/system/start` | Edge → Cloud | `{timestamp, version}` |
+| `cabin/{device_id}/system/stop` | Edge → Cloud | `{timestamp, reason}` |
+| `cabin/{device_id}/command/+` | Cloud → Edge | Commands (sync, restart, etc.) |
 
 ### Project Structure
 
@@ -94,12 +134,20 @@ smart-cabin/
 │   │   ├── plugin_manager.py      # Plugin lifecycle management
 │   │   ├── event_bus.py           # Internal event system
 │   │   ├── config.py              # Configuration management
-│   │   └── cloud_sync.py         # MQTT + offline buffer
+│   │   └── cloud_sync.py          # MQTT client + offline buffer
+│   ├── api/                       # Edge REST API
+│   │   ├── main.py                # FastAPI app
+│   │   ├── routers/
+│   │   │   ├── faces.py           # Face enrollment/management
+│   │   │   ├── status.py          # System status
+│   │   │   └── logs.py            # Recognition logs
+│   │   └── schemas.py             # API request/response models
 │   ├── plugins/                   # Plugin modules
 │   │   └── face_recognition/
 │   │       ├── plugin.py          # Plugin entry point
 │   │       ├── detector.py        # Face detection wrapper
 │   │       ├── recognizer.py      # Face embedding + matching
+│   │       ├── database.py        # Local face database (SQLite)
 │   │       └── models/            # NCNN model files
 │   ├── inference/                 # C++ inference engine
 │   │   ├── CMakeLists.txt
@@ -108,40 +156,39 @@ smart-cabin/
 │   │   │   ├── face_recognizer.cpp
 │   │   │   └── python_bindings.cpp  # pybind11
 │   │   └── include/
+│   ├── tools/                     # CLI tools
+│   │   ├── enroll_face.py         # Face enrollment script
+│   │   └── data_recorder.py      # Video/snapshot recorder for training data
+│   ├── data/                      # Collected training data (gitignored)
+│   │   ├── snapshots/            # Auto-captured face crops
+│   │   ├── frames/               # Periodic full-frame captures
+│   │   └── videos/               # Recorded video segments
 │   ├── tests/
 │   ├── config.yaml
-│   ├── requirements.txt
-│   └── Dockerfile                 # For development/testing
-├── cloud/                         # Cloud backend
-│   ├── api/                       # FastAPI application
-│   │   ├── main.py
-│   │   ├── routers/
-│   │   ├── models/
-│   │   ├── services/
-│   │   └── schemas/
-│   ├── dashboard/                 # Web frontend
-│   │   ├── src/
-│   │   └── package.json
-│   ├── docker-compose.yml         # PostgreSQL + Mosquitto + API + MinIO
-│   ├── migrations/
-│   └── tests/
+│   └── requirements.txt
 ├── shared/                        # Shared protocols/schemas
 │   ├── mqtt_topics.py
 │   └── event_schemas.py
-└── docs/
+├── docs/
+│   ├── implementation_plan.md
+│   └── api_spec.md                # API documentation cho đội cloud
+└── deploy/
+    ├── setup_edge.sh              # Edge setup script
+    ├── mosquitto.conf             # MQTT broker config
+    └── smart-cabin.service        # Systemd service
 ```
 
 ## Task Breakdown
 
-### Task 1: Khởi tạo project structure & Core Configuration System
+### Task 1: Khởi tạo project structure & Core Configuration System ✅
 
 **Objective**: Tạo skeleton project với config management system hoạt động.
 
 **Implementation guidance**:
-- Khởi tạo Git repo, tạo folder structure như trên
+- Khởi tạo Git repo, tạo folder structure
 - Implement `edge/core/config.py` - load YAML config, support environment variables override
 - Tạo `config.yaml` mẫu với các section: camera, plugins, mqtt, logging
-- Setup Python virtual environment, `requirements.txt` cơ bản
+- Setup Python virtual environment (uv), `requirements.txt`
 - Viết unit tests cho config loading, validation, default values
 
 **Test requirements**:
@@ -154,7 +201,7 @@ smart-cabin/
 
 ---
 
-### Task 2: Video Pipeline - RTSP Capture & Frame Distribution
+### Task 2: Video Pipeline - RTSP Capture & Frame Distribution ✅
 
 **Objective**: Xây dựng video pipeline nhận stream RTSP và phân phối frames cho consumers.
 
@@ -163,15 +210,16 @@ smart-cabin/
 - Design thread-safe frame buffer (ring buffer) để plugins consume frames không block pipeline
 - Support configurable FPS (capture ở native FPS, distribute ở target FPS để tiết kiệm CPU)
 - Implement graceful reconnection khi RTSP stream bị ngắt
+- Connection timeout cho RTSP
 - Callback-based frame distribution pattern (observer pattern)
 
 **Test requirements**:
 - Test kết nối RTSP stream (dùng mock hoặc local test stream)
-- Test frame rate throttling (capture 25fps → distribute 5fps)
+- Test frame rate throttling (capture 25fps → distribute 15fps)
 - Test reconnection logic khi stream ngắt
 - Test memory không leak khi chạy lâu (frame buffer bounded)
 
-**Demo**: Chạy video pipeline, log FPS đang nhận được, hiển thị frame count. Simulate ngắt kết nối và verify auto-reconnect.
+**Demo**: Chạy video pipeline với camera thực, hiển thị FPS/Resolution/Timestamp/Latency/Reconnects trên overlay.
 
 ---
 
@@ -268,8 +316,8 @@ smart-cabin/
 
 **Implementation guidance**:
 - Implement `edge/plugins/face_recognition/plugin.py` kế thừa BasePlugin
+- Implement `edge/plugins/face_recognition/database.py` - local SQLite face database
 - Pipeline: frame → detect faces → align → extract embedding → match against database
-- Face database: local SQLite lưu embeddings + person_id + metadata
 - Matching: cosine similarity với threshold configurable (default 0.6)
 - Anti-spoofing cơ bản: reject faces quá nhỏ (< 80px), blur detection
 - Rate limiting: không recognize cùng 1 người liên tục (cooldown 30s)
@@ -286,112 +334,145 @@ smart-cabin/
 
 ---
 
-### Task 8: Cloud Backend - Database & API Foundation
+### Task 8: Data Collection Tool & Auto-Snapshot
 
-**Objective**: Setup cloud backend với Docker, PostgreSQL, và core API endpoints.
+**Objective**: Thu thập dữ liệu training từ camera — cả manual recording lẫn auto-snapshot khi detect face.
 
 **Implementation guidance**:
-- Tạo `docker-compose.yml`: PostgreSQL, Mosquitto MQTT broker, FastAPI app, MinIO (face images)
-- Design database schema: `persons`, `face_embeddings`, `recognition_logs`, `devices`
-- Implement FastAPI app với basic structure (routers, models, schemas)
-- Implement CRUD APIs: Person management (create, read, update, delete)
-- Implement face enrollment API: upload ảnh → extract embedding (server-side) → store
-- Alembic migrations setup
+
+**Phần A - Manual Data Recorder** (`edge/tools/data_recorder.py`):
+- CLI tool chạy độc lập (không cần plugin system)
+- Modes:
+  - **Record video**: Ghi video segments (configurable duration, e.g., 5 phút/file)
+  - **Periodic snapshot**: Chụp full-frame mỗi N giây
+  - **Continuous**: Kết hợp cả video + snapshot
+- Output structure:
+  ```
+  data/
+  ├── videos/YYYY-MM-DD/cabin-001_HH-MM-SS.mp4
+  └── frames/YYYY-MM-DD/cabin-001_HH-MM-SS_frame.jpg
+  ```
+- Storage management: auto-delete files cũ khi disk usage > threshold
+- Metadata: lưu JSON sidecar (timestamp, resolution, camera_id, duration)
+
+**Phần B - Auto Face Snapshot** (tích hợp vào Face Recognition Plugin):
+- Khi detect face → lưu:
+  - Face crop (aligned, 112x112) → `data/snapshots/faces/`
+  - Full frame with bbox annotation → `data/snapshots/full/`
+- Label: `recognized_{person_id}_{timestamp}.jpg` hoặc `unknown_{timestamp}.jpg`
+- Configurable: enable/disable, max snapshots per person per day (tránh spam)
+- Hữu ích cho: fine-tune model, review false positives/negatives
 
 **Test requirements**:
-- Test database migrations run successfully
-- Test CRUD APIs cho person management
-- Test face enrollment flow
-- Test API validation (invalid inputs)
-- Integration test với Docker compose
+- Test video recording (duration, file rotation)
+- Test snapshot capture (periodic interval)
+- Test storage cleanup (disk threshold)
+- Test auto face snapshot (trigger on detect event)
+- Test output file naming/structure
 
-**Demo**: Docker compose up, tạo person qua API, upload face image, verify data trong PostgreSQL.
+**Demo**:
+- Chạy `data_recorder.py --mode video --duration 60` → verify video file 1 phút được tạo
+- Chạy `data_recorder.py --mode snapshot --interval 5` → verify snapshot mỗi 5s
+- Chạy full system → verify face crops tự động xuất hiện trong `data/snapshots/`
 
 ---
 
-### Task 9: Cloud Backend - MQTT Integration & Recognition Logs
+### Task 9: Face Enrollment Tool (CLI)
 
-**Objective**: Kết nối MQTT broker với backend để nhận events từ edge và lưu logs.
+**Objective**: Tạo tool đăng ký khuôn mặt trực tiếp trên Edge device.
 
 **Implementation guidance**:
-- Implement MQTT subscriber trong FastAPI app (listen to `cabin/+/face/recognized`)
-- Khi nhận event → lưu vào `recognition_logs` table (person_id, timestamp, confidence, device_id)
-- Implement REST API để query logs (filter by person, date range, device)
-- Implement sync protocol: edge gửi new recognitions, cloud confirm receipt
-- Offline buffer: edge lưu events khi mất kết nối, sync khi reconnect
-- MQTT topic design: `cabin/{device_id}/face/recognized`, `cabin/{device_id}/status`
+- Implement `edge/tools/enroll_face.py` - CLI tool
+- Modes:
+  - **Camera capture**: Mở camera, hiển thị preview, nhấn key để capture face
+  - **Image file**: Truyền path ảnh có sẵn
+- Flow: Capture/load ảnh → Detect face → Extract embedding → Lưu vào SQLite
+- Metadata: person_id, name, department/floor (optional)
+- Validation: đảm bảo chỉ 1 face trong ảnh, đủ chất lượng
+- Support multiple ảnh cho cùng 1 người (tăng accuracy)
 
 **Test requirements**:
-- Test MQTT message handling (valid/invalid messages)
-- Test log persistence
-- Test log query API với filters
-- Test offline → online sync scenario
+- Test enrollment flow (mock camera + mock inference)
+- Test validation (no face, multiple faces, blurry)
+- Test database persistence
+- Test duplicate detection
 
-**Demo**: Publish mock recognition event qua MQTT, verify log xuất hiện trong database, query qua API.
+**Demo**: Chạy CLI tool, capture face từ camera, đăng ký thành công, verify trong database. Sau đó face recognition nhận diện được người vừa đăng ký.
 
 ---
 
-### Task 10: Edge Cloud Sync Service
+### Task 10: MQTT Client & Cloud Sync
 
-**Objective**: Implement edge-side cloud sync với MQTT và offline buffering.
+**Objective**: Implement MQTT client trên edge để publish events và nhận commands từ cloud.
 
 **Implementation guidance**:
 - Implement `edge/core/cloud_sync.py`
 - MQTT client (paho-mqtt) kết nối Mosquitto broker
-- Subscribe to commands từ cloud: `cabin/{device_id}/command/+` (sync faces, update config...)
-- Publish events: recognition events, health status, heartbeat
+- Publish events khi Event Bus emit: recognition events, heartbeat, system status
+- Subscribe commands từ cloud: `cabin/{device_id}/command/+`
 - Offline buffer: SQLite queue, flush khi reconnected
-- Face database sync: cloud push new/updated face embeddings xuống edge
+- Heartbeat: publish system stats mỗi 30s (CPU, memory, FPS, uptime)
+- Setup Mosquitto broker config (deploy/mosquitto.conf)
 
 **Test requirements**:
 - Test MQTT connection và reconnection
-- Test event publishing
+- Test event publishing (face recognized → MQTT message)
 - Test offline buffering (disconnect → buffer → reconnect → flush)
-- Test face database sync (cloud → edge)
+- Test command handling (cloud → edge)
+- Test heartbeat publishing
 
-**Demo**: Chạy edge app, disconnect MQTT, generate recognition events (buffered), reconnect → verify events sync lên cloud.
-
----
-
-### Task 11: Web Dashboard - Person Management & Face Enrollment
-
-**Objective**: Xây dựng web dashboard để quản lý cư dân và đăng ký khuôn mặt.
-
-**Implementation guidance**:
-- Setup React (hoặc Vue 3) project trong `cloud/dashboard/`
-- Pages: Login, Dashboard (overview), Person List, Person Detail, Face Enrollment
-- Person management: CRUD operations qua REST API
-- Face enrollment: webcam capture hoặc upload ảnh, preview detected face, confirm enrollment
-- Responsive design (sử dụng trên tablet/phone khi đăng ký face)
-- Component library: Ant Design hoặc shadcn/ui
-
-**Test requirements**:
-- Test person CRUD flow (create, edit, delete)
-- Test face enrollment flow (upload → preview → confirm)
-- Test form validation
-- Test responsive layout
-
-**Demo**: Mở dashboard, tạo person mới, upload face photo, verify enrollment thành công.
+**Demo**: Chạy edge + mosquitto, subscribe topic bằng `mosquitto_sub`, verify events xuất hiện khi face recognized. Test offline buffering.
 
 ---
 
-### Task 12: Web Dashboard - Live Monitoring & Recognition Logs
+### Task 11: Edge REST API
 
-**Objective**: Thêm trang monitoring realtime và xem recognition history.
+**Objective**: Expose REST API trên Edge cho đội cloud và admin operations.
 
 **Implementation guidance**:
-- Real-time dashboard: WebSocket từ backend push live recognition events
-- Recognition log page: table với filter (person, date range), pagination
-- Activity timeline: visual timeline ai đi thang lúc nào
-- Device status: hiển thị edge device online/offline, last heartbeat
-- Statistics: số lần nhận diện/ngày, peak hours chart
+- Implement `edge/api/main.py` - FastAPI app chạy trên port 8080
+- Endpoints:
+  - `GET /api/status` - system status
+  - `GET /api/faces` - list registered faces
+  - `POST /api/faces/enroll` - đăng ký face (upload ảnh)
+  - `DELETE /api/faces/{id}` - xóa face
+  - `GET /api/logs` - recognition logs với filter
+  - `GET /api/plugins` - plugin status
+  - `POST /api/plugins/{name}/restart` - restart plugin
+  - `GET /api/stats` - pipeline stats
+- Auto-generated OpenAPI docs (`/docs`) cho đội cloud tham khảo
+- CORS enabled cho dashboard gọi trực tiếp
 
 **Test requirements**:
-- Test WebSocket connection và live updates
-- Test log filtering và pagination
-- Test statistics calculation accuracy
+- Test tất cả endpoints (happy path + error cases)
+- Test face enrollment qua API (upload image)
+- Test query logs với filters (date range, person_id)
+- Test plugin restart endpoint
 
-**Demo**: Chạy full system (edge + cloud + dashboard), nhận diện face → event xuất hiện realtime trên dashboard, xem log history.
+**Demo**: Start API server, dùng Swagger UI (`/docs`) để test các endpoints. Cung cấp API spec cho đội cloud.
+
+---
+
+### Task 12: API Documentation & Protocol Spec
+
+**Objective**: Viết tài liệu API/Protocol cho đội cloud integrate.
+
+**Implementation guidance**:
+- Tạo `docs/api_spec.md`:
+  - REST API specification (endpoints, request/response schemas, auth)
+  - MQTT topics & message formats (JSON schemas)
+  - Error codes & handling
+  - Example requests/responses
+- Auto-export OpenAPI JSON từ FastAPI (`openapi.json`)
+- Sequence diagrams cho main flows:
+  - Face enrollment flow
+  - Face recognition → event → cloud
+  - Heartbeat & health monitoring
+  - Offline sync protocol
+
+**Test requirements**: N/A (documentation task)
+
+**Demo**: Deliver `docs/api_spec.md` + `openapi.json` cho đội cloud.
 
 ---
 
@@ -400,20 +481,23 @@ smart-cabin/
 **Objective**: Kết nối tất cả components, test end-to-end flow, optimize performance.
 
 **Implementation guidance**:
-- Integration test: Camera → Edge → Face Recognition → MQTT → Cloud → Dashboard
+- Integration test: Camera → Edge → Face Recognition → MQTT → broker
+- Integration test: Cloud team gọi Edge REST API
 - Performance profiling trên Orange Pi 4 Pro: CPU usage, memory, latency
 - Optimize nếu cần: reduce frame processing rate, model quantization (INT8)
 - Error handling hardening: network failures, camera disconnects, disk full
 - Logging consolidation: structured logging cho debugging
-- Documentation: setup guide, API docs, deployment guide
+- Systemd service setup (deploy/smart-cabin.service)
+- Deployment documentation
 
 **Test requirements**:
-- End-to-end test: đăng ký face → nhận diện → log xuất hiện trên dashboard
+- End-to-end test: đăng ký face → nhận diện → event qua MQTT
 - Stress test: chạy continuous 24h, verify no memory leak
-- Performance test: latency từ face appear → event on dashboard < 3s
+- Performance test: latency từ face appear → MQTT event < 1s
 - Failure recovery test: simulate các failure scenarios
+- API load test: concurrent requests
 
-**Demo**: Demo full flow: Đăng ký cư dân trên dashboard → cư dân đi qua camera → nhận diện thành công → log realtime trên dashboard. System chạy ổn định liên tục.
+**Demo**: Demo full flow trên Orange Pi: Đăng ký cư dân → cư dân đi qua camera → nhận diện → event publish qua MQTT + log qua REST API. System chạy ổn định, đội cloud subscribe thành công.
 
 ---
 
@@ -422,14 +506,22 @@ smart-cabin/
 | Component | Technology | Lý do |
 |-----------|-----------|-------|
 | Edge OS | Ubuntu/Debian (ARM64) | Official support |
-| Edge Orchestration | Python 3.10+ | Fast development, good ML ecosystem |
+| Edge Orchestration | Python 3.12+ | Fast development, good ML ecosystem |
 | Inference Engine | C++ + NCNN + pybind11 | Max performance trên ARM without NPU |
 | Face Detection | SCRFD-500M / YuNet | Ultra-lightweight, <10ms |
 | Face Embedding | MobileFaceNet | 1M params, high accuracy |
 | Edge Database | SQLite | Lightweight, no server needed |
+| Edge REST API | FastAPI | Async, auto-docs (OpenAPI), lightweight |
 | Communication | MQTT (Mosquitto) | Lightweight IoT protocol, pub/sub |
-| Cloud API | FastAPI (Python) | Async, fast, auto-docs |
-| Cloud Database | PostgreSQL | Robust, scalable |
-| Object Storage | MinIO | S3-compatible, self-hosted |
-| Web Dashboard | React + Ant Design | Rich components, responsive |
-| Containerization | Docker Compose | Easy deployment |
+| MQTT Broker | Mosquitto (self-hosted) | Simple, reliable, low resource |
+| Containerization | Systemd service | Native Linux, no Docker overhead on ARM |
+
+## Phân chia trách nhiệm
+
+| Phần | Ai làm | Giao tiếp |
+|------|--------|-----------|
+| Edge Platform (tất cả tasks trên) | Bạn | — |
+| MQTT Broker setup | Bạn | Cung cấp broker address cho cloud team |
+| Cloud Backend | Đội cloud dev | Subscribe MQTT + gọi Edge REST API |
+| Web Dashboard | Đội cloud dev | Dùng Cloud Backend API |
+| API Spec & Protocol docs | Bạn cung cấp | `docs/api_spec.md` + OpenAPI JSON |

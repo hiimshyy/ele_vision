@@ -24,6 +24,7 @@ import numpy as np
 
 from edge.core.config import CameraConfig, load_config
 from edge.core.video_pipeline import VideoPipeline, PipelineState
+from edge.core.logging_setup import setup_logging
 
 logging.basicConfig(
     level=logging.INFO,
@@ -102,9 +103,11 @@ class VideoDisplay:
         state = self._pipeline.state.value
         h, w = frame.shape[:2]
 
-        # Format timestamp
-        from datetime import datetime
-        ts_str = datetime.fromtimestamp(self._frame_timestamp).strftime("%H:%M:%S.%f")[:-3] if self._frame_timestamp > 0 else "--:--:--"
+        # Format uptime
+        uptime_sec = time.time() - self._pipeline.stats.start_time if self._pipeline.stats.start_time > 0 else 0
+        hours, remainder = divmod(int(uptime_sec), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        uptime_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
         # Semi-transparent background for text
         overlay = frame.copy()
@@ -117,7 +120,7 @@ class VideoDisplay:
         texts = [
             f"FPS: {stats.current_distribute_fps:.1f} (capture: {stats.current_capture_fps:.1f})",
             f"Resolution: {w}x{h}",
-            f"Timestamp: {ts_str}",
+            f"Uptime: {uptime_str}",
             f"Latency: {self._latency*1000:.1f} ms",
             f"Frame: #{self._frame_id} | Dropped: {stats.frames_dropped} | Reconnects: {stats.reconnect_count}",
         ]
@@ -158,6 +161,10 @@ def main():
     except FileNotFoundError:
         logger.warning("No config.yaml found, using defaults")
         config = None
+
+    # Setup file logging
+    if config:
+        setup_logging(config.logging)
 
     # Build camera config
     if args.url is not None:

@@ -181,7 +181,13 @@ class VideoPipeline:
 
         self._release_capture()
         self._set_state(PipelineState.STOPPED)
-        logger.info("Video pipeline stopped")
+        uptime = time.time() - self._stats.start_time if self._stats.start_time > 0 else 0
+        logger.info(
+            f"Video pipeline stopped (uptime: {uptime:.1f}s, "
+            f"captured: {self._stats.frames_captured}, "
+            f"distributed: {self._stats.frames_distributed}, "
+            f"reconnects: {self._stats.reconnect_count})"
+        )
 
     def _set_state(self, new_state: PipelineState) -> None:
         """Thread-safe state transition."""
@@ -212,7 +218,11 @@ class VideoPipeline:
                 ret, frame = self._capture.read()
 
                 if not ret:
-                    logger.warning("Frame read failed, attempting reconnection")
+                    uptime = time.time() - self._stats.start_time
+                    logger.warning(
+                        f"Frame read failed, attempting reconnection "
+                        f"(uptime: {uptime:.1f}s, frames_captured: {self._stats.frames_captured})"
+                    )
                     self._release_capture()
                     self._set_state(PipelineState.RECONNECTING)
                     self._stats.reconnect_count += 1

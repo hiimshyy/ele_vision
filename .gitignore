@@ -28,6 +28,10 @@ Thumbs.db
 edge/plugins/face_recognition/models/*.bin
 edge/plugins/face_recognition/models/*.param
 
+# Training data (collected locally)
+data/
+edge/data/
+
 # Build artifacts
 edge/inference/build/
 
