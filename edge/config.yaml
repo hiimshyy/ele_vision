@@ -32,6 +32,11 @@ plugins:
         min_face_size: 80
         cooldown_seconds: 30
 
+    - name: "dummy"
+      enabled: false
+      config:
+        log_interval: 10
+
     # Future plugins (disabled by default)
     # - name: "people_counter"
     #   enabled: false

@@ -24,9 +24,10 @@ import time
 import cv2
 import numpy as np
 
-from edge.core.config import CameraConfig, load_config
+from edge.core.config import CameraConfig, load_config, PluginsConfig, PluginEntry
 from edge.core.video_pipeline import VideoPipeline, PipelineState
 from edge.core.event_bus import EventBus
+from edge.core.plugin_manager import PluginManager
 from edge.core.logging_setup import setup_logging, get_logger
 from shared.event_schemas import (
     EventType,
@@ -180,7 +181,7 @@ def main():
     print("=" * 60)
     print()
 
-    # Create pipeline
+    # Create pipeline + event bus + plugin manager
     pipeline = VideoPipeline(camera_config)
 
     # --- Event Bus: subscribe to events for monitoring ---
@@ -192,7 +193,15 @@ def main():
 
     event_bus.subscribe("*", on_event)
 
-    # Register plugins
+    # --- Plugin Manager: load dummy plugin ---
+    manager = PluginManager(pipeline, event_bus)
+    plugins_config = PluginsConfig(modules=[
+        PluginEntry(name="dummy", enabled=True, config={"log_interval": 10, "fps": 5}),
+    ])
+    manager.load_plugins(plugins_config)
+    manager.start_all()
+
+    # Register additional test callbacks (not managed by PluginManager)
     display = DisplayPlugin(pipeline, scale=args.scale)
     pipeline.register_callback(display.on_frame, fps=15)
     pipeline.register_callback(slow_plugin, fps=2)
@@ -206,6 +215,7 @@ def main():
         print("\nInterrupted")
     finally:
         pipeline.stop()
+        manager.stop_all()
 
     # Summary
     stats = pipeline.stats
@@ -223,6 +233,10 @@ def main():
     print(f"    Published: {event_bus.stats.events_published}")
     print(f"    Delivered: {event_bus.stats.events_delivered}")
     print(f"    Handler Errors: {event_bus.stats.handler_errors}")
+    print(f"{'='*60}")
+    print(f"  Plugins:")
+    for p in manager.get_status():
+        print(f"    {p['name']}: state={p['state']} fps={p['fps']} uptime={p['uptime']:.1f}s")
     print(f"{'='*60}")
     print(f"  Check logs: cat logs/scheduler.log | grep plugin_stats")
     print(f"{'='*60}\n")
