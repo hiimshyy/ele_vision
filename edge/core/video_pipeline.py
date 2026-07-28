@@ -27,6 +27,13 @@ logger = logging.getLogger(__name__)
 
 # --- Types ---
 
+
+def _mask_url(url: str) -> str:
+    """Mask credentials in RTSP URL for safe logging."""
+    # rtsp://user:password@host → rtsp://user:***@host
+    import re
+    return re.sub(r"(://[^:]+:)[^@]+(@)", r"\1***\2", url)
+
 # Frame callback signature: (frame: np.ndarray, frame_id: int, timestamp: float) -> None
 FrameCallback = Callable[[np.ndarray, int, float], None]
 
@@ -162,7 +169,7 @@ class VideoPipeline:
 
         self._capture_thread.start()
         self._distribute_thread.start()
-        logger.info(f"Video pipeline started: {self._config.url}")
+        logger.info(f"Video pipeline started: {_mask_url(self._config.url)}")
 
     def stop(self) -> None:
         """Stop the video pipeline gracefully."""
@@ -271,7 +278,7 @@ class VideoPipeline:
             attempts += 1
             self._set_state(PipelineState.CONNECTING)
             logger.info(
-                f"Connecting to camera: {self._config.url} (attempt {attempts})"
+                f"Connecting to camera: {_mask_url(self._config.url)} (attempt {attempts})"
             )
 
             # Set connection timeout before opening
