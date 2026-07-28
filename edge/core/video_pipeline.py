@@ -460,11 +460,11 @@ class VideoPipeline:
                 fps_timer = time.time()
 
             # Sleep until next tick (shortest interval among callbacks)
-            min_interval = self._get_min_interval()
-            # Find time until next callback needs invocation
-            next_due = min_interval
+            # Recalculate with fresh time after processing
+            now_after = time.time()
+            next_due = self._get_min_interval()
             for sc in callbacks:
-                time_since_last = now - sc.last_invoked
+                time_since_last = now_after - sc.last_invoked
                 remaining = sc.interval - time_since_last
                 if remaining > 0:
                     next_due = min(next_due, remaining)
