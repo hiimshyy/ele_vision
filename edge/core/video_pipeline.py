@@ -14,6 +14,7 @@ Features:
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
@@ -124,6 +125,7 @@ class VideoPipeline:
         self._scheduler_thread: threading.Thread | None = None
         self._stats_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="plugin")
 
         # Stats
         self._stats = PipelineStats()
@@ -247,6 +249,7 @@ class VideoPipeline:
             self._scheduler_thread.join(timeout=5.0)
 
         self._release_capture()
+        self._executor.shutdown(wait=False)
         self._set_state(PipelineState.STOPPED)
         uptime = time.time() - self._stats.start_time if self._stats.start_time > 0 else 0
         logger.info(
@@ -441,14 +444,8 @@ class VideoPipeline:
 
             for sc in callbacks:
                 if now - sc.last_invoked >= sc.interval:
-                    try:
-                        sc.callback(frame_data.frame, frame_data.frame_id, frame_data.timestamp)
-                    except Exception as e:
-                        sched_logger.error(
-                            "event=callback_error | name={name} | error={err}",
-                            name=sc.callback.__name__, err=str(e),
-                        )
                     sc.last_invoked = now
+                    self._executor.submit(self._invoke_callback, sc, frame_data)
                     invoked_any = True
 
             if invoked_any:
@@ -481,6 +478,16 @@ class VideoPipeline:
             if not self._callbacks:
                 return 0.1  # Default 10fps tick when no callbacks
             return min(sc.interval for sc in self._callbacks)
+
+    def _invoke_callback(self, sc: ScheduledCallback, frame_data: FrameData) -> None:
+        """Invoke a single callback in a thread pool worker (non-blocking)."""
+        try:
+            sc.callback(frame_data.frame, frame_data.frame_id, frame_data.timestamp)
+        except Exception as e:
+            sched_logger.error(
+                "event=callback_error | name={name} | error={err}",
+                name=sc.callback.__name__, err=str(e),
+            )
 
     # --- Stats Thread ---
 

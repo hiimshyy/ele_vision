@@ -493,3 +493,126 @@ class TestThreadSafety:
 
         # Should not have received many more frames after unregister
         assert counts["total"] - count_at_unregister <= 2
+
+
+# --- Test: Plugin Isolation ---
+
+
+class TestPluginIsolation:
+    """Tests to verify scheduler resilience against slow or crashing plugins."""
+
+    @patch("edge.core.video_pipeline.cv2.VideoCapture")
+    def test_slow_plugin_does_not_block_others(self, mock_cv2):
+        """
+        A plugin that takes 100-500ms to process should NOT block other plugins
+        from receiving frames at their target FPS.
+        """
+        config = CameraConfig(
+            url="rtsp://fake/stream",
+            capture_fps=25,
+            process_fps=15,
+            reconnect_interval=0.1,
+            max_reconnect_attempts=0,
+        )
+        mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=10000)
+
+        pipeline = VideoPipeline(config)
+
+        counts = {"slow": 0, "fast": 0}
+        timestamps = {"fast": []}
+
+        def slow_plugin(frame, frame_id, timestamp):
+            """Simulates a heavy plugin (100-500ms processing)."""
+            time.sleep(0.3)  # 300ms processing time
+            counts["slow"] += 1
+
+        def fast_plugin(frame, frame_id, timestamp):
+            """Normal plugin that should not be affected by slow one."""
+            counts["fast"] += 1
+            timestamps["fast"].append(time.time())
+
+        pipeline.register_callback(slow_plugin, fps=2)   # Slow plugin at 2fps
+        pipeline.register_callback(fast_plugin, fps=10)  # Fast plugin at 10fps
+
+        pipeline.start()
+        time.sleep(3.0)  # Run for 3 seconds
+        pipeline.stop()
+
+        # Fast plugin should have received significantly more frames than slow
+        assert counts["fast"] > counts["slow"], (
+            f"Fast plugin ({counts['fast']}) should have more frames than slow ({counts['slow']})"
+        )
+
+        # Fast plugin should have ~30 frames in 3s at 10fps (allow tolerance)
+        assert counts["fast"] >= 15, (
+            f"Fast plugin should have at least 15 frames in 3s at 10fps, got {counts['fast']}"
+        )
+
+        # Slow plugin should still receive frames (not starved)
+        assert counts["slow"] >= 3, (
+            f"Slow plugin should have at least 3 frames in 3s at 2fps, got {counts['slow']}"
+        )
+
+        # Verify fast plugin timing is roughly consistent (not bunched up)
+        if len(timestamps["fast"]) >= 3:
+            intervals = [
+                timestamps["fast"][i+1] - timestamps["fast"][i]
+                for i in range(len(timestamps["fast"]) - 1)
+            ]
+            avg_interval = sum(intervals) / len(intervals)
+            # At 10fps, average interval should be ~0.1s (allow 0.05-0.3 for tolerance)
+            assert 0.03 <= avg_interval <= 0.5, (
+                f"Fast plugin average interval {avg_interval:.3f}s too far from 0.1s target"
+            )
+
+    @patch("edge.core.video_pipeline.cv2.VideoCapture")
+    def test_exception_plugin_does_not_crash_pipeline(self, mock_cv2):
+        """
+        A plugin that always throws exceptions should NOT stop the pipeline
+        or prevent other plugins from receiving frames.
+        """
+        config = CameraConfig(
+            url="rtsp://fake/stream",
+            capture_fps=25,
+            process_fps=15,
+            reconnect_interval=0.1,
+            max_reconnect_attempts=0,
+        )
+        mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=10000)
+
+        pipeline = VideoPipeline(config)
+
+        counts = {"good": 0, "errors_thrown": 0}
+
+        def crashing_plugin(frame, frame_id, timestamp):
+            """Plugin that always raises an exception."""
+            counts["errors_thrown"] += 1
+            raise RuntimeError(f"Plugin crash at frame {frame_id}!")
+
+        def healthy_plugin(frame, frame_id, timestamp):
+            """Normal plugin that should keep working regardless."""
+            counts["good"] += 1
+
+        pipeline.register_callback(crashing_plugin, fps=10)
+        pipeline.register_callback(healthy_plugin, fps=10)
+
+        pipeline.start()
+        time.sleep(2.0)  # Run for 2 seconds
+        pipeline.stop()
+
+        # Pipeline should still be running (not crashed)
+        assert pipeline.state == PipelineState.STOPPED  # Clean stop
+
+        # Crashing plugin should have been called (errors were thrown)
+        assert counts["errors_thrown"] > 0, "Crashing plugin was never called"
+
+        # Healthy plugin should have received frames normally
+        assert counts["good"] >= 10, (
+            f"Healthy plugin should have at least 10 frames in 2s at 10fps, got {counts['good']}"
+        )
+
+        # Both should have similar invocation counts (scheduler doesn't skip crashing one)
+        ratio = counts["good"] / max(counts["errors_thrown"], 1)
+        assert 0.5 <= ratio <= 2.0, (
+            f"Good/error ratio {ratio:.1f} too skewed - scheduler may be biased"
+        )
