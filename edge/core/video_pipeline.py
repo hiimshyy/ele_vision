@@ -434,6 +434,7 @@ class VideoPipeline:
                 "event=periodic_stats | uptime_s={uptime:.0f} "
                 "| capture_fps={cfps:.1f} | distribute_fps={dfps:.1f} "
                 "| captured={captured} | distributed={distributed} | dropped={dropped} "
+                "| reconnects={reconnects} "
                 "| cpu_percent={cpu:.1f} | ram_used_mb={ram_used:.0f} | ram_percent={ram_pct:.1f}",
                 uptime=uptime,
                 cfps=self._stats.current_capture_fps,
@@ -441,6 +442,7 @@ class VideoPipeline:
                 captured=self._stats.frames_captured,
                 distributed=self._stats.frames_distributed,
                 dropped=self._stats.frames_dropped,
+                reconnects=self._stats.reconnect_count,
                 cpu=cpu_percent,
                 ram_used=memory.used / (1024 * 1024),
                 ram_pct=memory.percent,
