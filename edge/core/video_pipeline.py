@@ -1,20 +1,20 @@
 """
 Smart Cabin Platform - Video Pipeline
 
-Captures frames from RTSP stream and distributes them to registered consumers
-(plugins) via callback pattern. Features:
-- Thread-safe ring buffer to decouple capture from processing
-- Configurable FPS throttling (capture at native FPS, distribute at lower FPS)
-- Automatic reconnection with backoff on stream failure
-- Observer pattern for frame distribution to multiple consumers
-- Periodic stats logging (FPS, CPU, RAM) every 30s
+Architecture:
+    Camera (RTSP) → Capture Thread → Latest Frame → Frame Scheduler → Per-plugin callbacks
+
+Features:
+- Single latest frame buffer (no ring buffer, minimal RAM)
+- Frame Scheduler with per-callback FPS control
+- Automatic reconnection with configurable timeout
+- Periodic stats logging (FPS, CPU, RAM, decode time, latency)
 """
 
 import re
 import threading
 import time
-from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
 
@@ -33,8 +33,10 @@ logger = get_logger("camera")
 
 def _mask_url(url: str) -> str:
     """Mask credentials in RTSP URL for safe logging."""
-    # rtsp://user:password@host → rtsp://user:***@host
     return re.sub(r"(://[^:]+:)[^@]+(@)", r"\1***\2", url)
+
+
+# --- Types ---
 
 # Frame callback signature: (frame: np.ndarray, frame_id: int, timestamp: float) -> None
 FrameCallback = Callable[[np.ndarray, int, float], None]
@@ -65,9 +67,9 @@ class PipelineStats:
     start_time: float = 0.0
     # Video metrics
     resolution: tuple[int, int] = (0, 0)  # (width, height)
-    decode_time_ms: float = 0.0  # Average decode time per frame
-    latency_ms: float = 0.0  # Capture-to-distribute latency
-    queue_length: int = 0  # Current buffer occupancy
+    decode_time_ms: float = 0.0  # Time to decode one frame
+    buffer_latency_ms: float = 0.0  # Latest frame age when scheduled
+    queue_length: int = 0  # Always 0 or 1 (latest frame buffer)
 
 
 @dataclass
@@ -79,16 +81,27 @@ class FrameData:
     timestamp: float
 
 
+@dataclass
+class ScheduledCallback:
+    """A registered callback with its own FPS target."""
+
+    callback: FrameCallback
+    target_fps: float
+    interval: float  # 1.0 / target_fps
+    last_invoked: float = 0.0  # Timestamp of last invocation
+
+
 # --- Video Pipeline ---
 
 
 class VideoPipeline:
     """
-    RTSP video capture pipeline with frame distribution.
+    RTSP video capture pipeline with per-callback frame scheduling.
 
-    Runs a capture thread that reads frames from camera and places them
-    into a ring buffer. A distributor thread consumes from the buffer
-    at the configured process_fps and invokes registered callbacks.
+    Architecture:
+    - Capture thread: reads frames, stores latest frame (atomic swap)
+    - Scheduler thread: checks timing per callback, invokes at target FPS
+    - Stats thread: logs periodic metrics every 30s
     """
 
     def __init__(self, config: CameraConfig):
@@ -96,18 +109,19 @@ class VideoPipeline:
         self._state = PipelineState.IDLE
         self._state_lock = threading.Lock()
 
-        # Ring buffer (bounded deque)
-        self._buffer: deque[FrameData] = deque(maxlen=30)
-        self._buffer_lock = threading.Lock()
-        self._buffer_event = threading.Event()
+        # Latest frame (single buffer, atomic swap)
+        self._latest_frame: FrameData | None = None
+        self._frame_lock = threading.Lock()
+        self._frame_event = threading.Event()
 
-        # Frame consumers (observers)
-        self._callbacks: list[FrameCallback] = []
+        # Scheduled callbacks (observers with per-callback FPS)
+        self._callbacks: list[ScheduledCallback] = []
         self._callbacks_lock = threading.Lock()
 
         # Threading
         self._capture_thread: threading.Thread | None = None
-        self._distribute_thread: threading.Thread | None = None
+        self._scheduler_thread: threading.Thread | None = None
+        self._stats_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
         # Stats
@@ -137,26 +151,49 @@ class VideoPipeline:
             start_time=self._stats.start_time,
             resolution=self._stats.resolution,
             decode_time_ms=self._stats.decode_time_ms,
-            latency_ms=self._stats.latency_ms,
+            buffer_latency_ms=self._stats.buffer_latency_ms,
             queue_length=self._stats.queue_length,
         )
 
-    def register_callback(self, callback: FrameCallback) -> None:
-        """Register a frame consumer callback."""
+    def register_callback(self, callback: FrameCallback, fps: float = 15.0) -> None:
+        """
+        Register a frame consumer callback with target FPS.
+
+        Args:
+            callback: Function to receive frames
+            fps: Target frames per second for this callback (default 15)
+        """
         with self._callbacks_lock:
-            if callback not in self._callbacks:
-                self._callbacks.append(callback)
-                logger.info("event=callback_registered | name={name}", name=callback.__name__)
+            # Check if already registered
+            for sc in self._callbacks:
+                if sc.callback is callback:
+                    return
+
+            scheduled = ScheduledCallback(
+                callback=callback,
+                target_fps=fps,
+                interval=1.0 / fps,
+                last_invoked=0.0,
+            )
+            self._callbacks.append(scheduled)
+            logger.info(
+                "event=callback_registered | name={name} | target_fps={fps}",
+                name=callback.__name__, fps=fps,
+            )
 
     def unregister_callback(self, callback: FrameCallback) -> None:
         """Unregister a frame consumer callback."""
         with self._callbacks_lock:
-            if callback in self._callbacks:
-                self._callbacks.remove(callback)
-                logger.info("event=callback_unregistered | name={name}", name=callback.__name__)
+            self._callbacks = [
+                sc for sc in self._callbacks if sc.callback is not callback
+            ]
+            logger.info(
+                "event=callback_unregistered | name={name}",
+                name=callback.__name__,
+            )
 
     def start(self) -> None:
-        """Start the video pipeline (capture + distribution threads)."""
+        """Start the video pipeline (capture + scheduler + stats threads)."""
         if self.state in (PipelineState.RUNNING, PipelineState.CONNECTING):
             logger.warning("event=start_ignored | reason=already_running")
             return
@@ -164,6 +201,7 @@ class VideoPipeline:
         self._stop_event.clear()
         self._stats = PipelineStats(start_time=time.time())
         self._frame_counter = 0
+        self._latest_frame = None
 
         self._set_state(PipelineState.CONNECTING)
 
@@ -172,9 +210,9 @@ class VideoPipeline:
             name="video-capture",
             daemon=True,
         )
-        self._distribute_thread = threading.Thread(
-            target=self._distribute_loop,
-            name="video-distribute",
+        self._scheduler_thread = threading.Thread(
+            target=self._scheduler_loop,
+            name="video-scheduler",
             daemon=True,
         )
         self._stats_thread = threading.Thread(
@@ -184,13 +222,12 @@ class VideoPipeline:
         )
 
         self._capture_thread.start()
-        self._distribute_thread.start()
+        self._scheduler_thread.start()
         self._stats_thread.start()
         logger.info(
-            "event=pipeline_started | url={url} | capture_fps={cfps} | process_fps={pfps}",
+            "event=pipeline_started | url={url} | capture_fps={cfps}",
             url=_mask_url(self._config.url),
             cfps=self._config.capture_fps,
-            pfps=self._config.process_fps,
         )
 
     def stop(self) -> None:
@@ -200,13 +237,13 @@ class VideoPipeline:
 
         logger.info("event=pipeline_stopping")
         self._stop_event.set()
-        self._buffer_event.set()  # Wake up distributor if waiting
+        self._frame_event.set()  # Wake up scheduler if waiting
 
         if self._capture_thread and self._capture_thread.is_alive():
             self._capture_thread.join(timeout=5.0)
 
-        if self._distribute_thread and self._distribute_thread.is_alive():
-            self._distribute_thread.join(timeout=5.0)
+        if self._scheduler_thread and self._scheduler_thread.is_alive():
+            self._scheduler_thread.join(timeout=5.0)
 
         self._release_capture()
         self._set_state(PipelineState.STOPPED)
@@ -235,11 +272,10 @@ class VideoPipeline:
     # --- Capture Thread ---
 
     def _capture_loop(self) -> None:
-        """Main capture loop - reads frames from RTSP and places into buffer."""
+        """Capture loop: decode frames, store latest frame only."""
         while not self._stop_event.is_set():
             # Connect to stream
             if not self._connect():
-                # If max attempts reached (ERROR state) or stop requested, exit
                 if self._stop_event.is_set() or self.state == PipelineState.ERROR:
                     break
                 continue
@@ -272,7 +308,7 @@ class VideoPipeline:
                 self._stats.decode_time_ms = decode_time
                 fps_count += 1
 
-                # Track resolution (once or on change)
+                # Track resolution (log on change)
                 h, w = frame.shape[:2]
                 if self._stats.resolution != (w, h):
                     self._stats.resolution = (w, h)
@@ -288,19 +324,17 @@ class VideoPipeline:
                     fps_count = 0
                     fps_timer = time.time()
 
-                # Put frame into ring buffer
+                # Store latest frame (atomic swap)
                 frame_data = FrameData(
                     frame=frame,
                     frame_id=self._frame_counter,
                     timestamp=time.time(),
                 )
 
-                with self._buffer_lock:
-                    if len(self._buffer) == self._buffer.maxlen:
-                        self._stats.frames_dropped += 1
-                    self._buffer.append(frame_data)
+                with self._frame_lock:
+                    self._latest_frame = frame_data
 
-                self._buffer_event.set()
+                self._frame_event.set()
 
     def _connect(self) -> bool:
         """Attempt to connect to the RTSP stream with retry logic."""
@@ -322,7 +356,7 @@ class VideoPipeline:
                 url=_mask_url(self._config.url), attempt=attempts,
             )
 
-            # Set connection timeout before opening
+            # Set connection timeout
             timeout_ms = int(self._config.connection_timeout * 1000)
             self._capture = cv2.VideoCapture(
                 source,
@@ -365,81 +399,85 @@ class VideoPipeline:
                 pass
             self._capture = None
 
-    # --- Distribution Thread ---
+    # --- Scheduler Thread ---
 
-    def _distribute_loop(self) -> None:
-        """Distribute frames to registered callbacks at configured process_fps."""
-        frame_interval = 1.0 / self._config.process_fps
-        last_distribute_time = 0.0
+    def _scheduler_loop(self) -> None:
+        """
+        Frame scheduler: invoke each callback at its own target FPS.
+
+        Runs at tick rate = max(all registered FPS), checks each callback's
+        timing independently.
+        """
         fps_timer = time.time()
         fps_count = 0
 
         while not self._stop_event.is_set():
-            # Wait for frames to be available
-            self._buffer_event.wait(timeout=1.0)
+            # Wait for a new frame to be available
+            self._frame_event.wait(timeout=1.0)
 
             if self._stop_event.is_set():
                 break
 
-            # FPS throttling
-            now = time.time()
-            elapsed_since_last = now - last_distribute_time
-            if elapsed_since_last < frame_interval:
-                sleep_time = frame_interval - elapsed_since_last
-                time.sleep(sleep_time)
-
-            # Get latest frame from buffer
-            frame_data = None
-            with self._buffer_lock:
-                if self._buffer:
-                    frame_data = self._buffer[-1]  # Latest frame
-                    self._stats.queue_length = len(self._buffer)
-                    self._buffer.clear()  # Drop older frames
-                else:
-                    self._buffer_event.clear()
-                    continue
+            # Get latest frame
+            with self._frame_lock:
+                frame_data = self._latest_frame
 
             if frame_data is None:
-                self._buffer_event.clear()
+                self._frame_event.clear()
                 continue
 
-            last_distribute_time = time.time()
+            # Track buffer latency
+            now = time.time()
+            self._stats.buffer_latency_ms = (now - frame_data.timestamp) * 1000
+            self._stats.queue_length = 1 if self._latest_frame else 0
 
-            # Track latency (capture → distribute)
-            self._stats.latency_ms = (last_distribute_time - frame_data.timestamp) * 1000
+            # Check each callback's timing
+            invoked_any = False
+            with self._callbacks_lock:
+                callbacks = list(self._callbacks)
 
-            # Distribute to callbacks
-            self._invoke_callbacks(frame_data)
+            for sc in callbacks:
+                if now - sc.last_invoked >= sc.interval:
+                    try:
+                        sc.callback(frame_data.frame, frame_data.frame_id, frame_data.timestamp)
+                    except Exception as e:
+                        logger.error(
+                            "event=callback_error | name={name} | error={err}",
+                            name=sc.callback.__name__, err=str(e),
+                        )
+                    sc.last_invoked = now
+                    invoked_any = True
 
-            # Update distribute FPS
-            fps_count += 1
+            if invoked_any:
+                self._stats.frames_distributed += 1
+                fps_count += 1
+
+            # Calculate distribute FPS every second
             elapsed = time.time() - fps_timer
             if elapsed >= 1.0:
                 self._stats.current_distribute_fps = fps_count / elapsed
                 fps_count = 0
                 fps_timer = time.time()
 
-            self._stats.frames_distributed += 1
+            # Small sleep to avoid busy-waiting
+            # Tick at max registered FPS rate
+            min_interval = self._get_min_interval()
+            self._frame_event.clear()
+            if min_interval > 0:
+                time.sleep(min_interval * 0.5)  # Sleep half interval, check next
 
-    def _invoke_callbacks(self, frame_data: FrameData) -> None:
-        """Invoke all registered callbacks with the frame."""
+    def _get_min_interval(self) -> float:
+        """Get the smallest interval among registered callbacks."""
         with self._callbacks_lock:
-            callbacks = list(self._callbacks)
-
-        for callback in callbacks:
-            try:
-                callback(frame_data.frame, frame_data.frame_id, frame_data.timestamp)
-            except Exception as e:
-                logger.error(
-                    "event=callback_error | name={name} | error={err}",
-                    name=callback.__name__, err=str(e),
-                )
+            if not self._callbacks:
+                return 0.1  # Default 10fps tick when no callbacks
+            return min(sc.interval for sc in self._callbacks)
 
     # --- Stats Thread ---
 
     def _stats_loop(self) -> None:
-        """Log periodic stats (FPS, CPU, RAM) every 30 seconds."""
-        stats_interval = 30  # seconds
+        """Log periodic stats (FPS, CPU, RAM, video metrics) every 30 seconds."""
+        stats_interval = 30
 
         while not self._stop_event.is_set():
             self._stop_event.wait(timeout=stats_interval)
@@ -458,7 +496,8 @@ class VideoPipeline:
             logger.info(
                 "event=periodic_stats | uptime_s={uptime:.0f} "
                 "| capture_fps={cfps:.1f} | distribute_fps={dfps:.1f} "
-                "| resolution={res} | decode_ms={decode:.1f} | latency_ms={lat:.1f} | queue_len={qlen} "
+                "| resolution={res} | decode_ms={decode:.1f} "
+                "| buffer_latency_ms={lat:.1f} "
                 "| reconnects={reconnects} "
                 "| cpu_percent={cpu:.1f} | ram_used_mb={ram_used:.0f} | ram_percent={ram_pct:.1f}",
                 uptime=uptime,
@@ -466,8 +505,7 @@ class VideoPipeline:
                 dfps=self._stats.current_distribute_fps,
                 res=f"{self._stats.resolution[0]}x{self._stats.resolution[1]}",
                 decode=self._stats.decode_time_ms,
-                lat=self._stats.latency_ms,
-                qlen=self._stats.queue_length,
+                lat=self._stats.buffer_latency_ms,
                 reconnects=self._stats.reconnect_count,
                 cpu=cpu_percent,
                 ram_used=memory.used / (1024 * 1024),
@@ -481,11 +519,9 @@ if __name__ == "__main__":
     import sys
 
     from edge.core.config import load_config
+    from edge.core.logging_setup import setup_logging
 
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    setup_logging("DEBUG")
 
     # Load config
     config_path = sys.argv[1] if len(sys.argv) > 1 else None
@@ -496,23 +532,23 @@ if __name__ == "__main__":
 
     # Register a demo callback
     def demo_callback(frame: np.ndarray, frame_id: int, timestamp: float) -> None:
-        if frame_id % 10 == 0:  # Log every 10 frames
+        if frame_id % 50 == 0:
             h, w = frame.shape[:2]
             stats = pipeline.stats
             print(
                 f"  Frame #{frame_id}: {w}x{h} | "
                 f"Capture FPS: {stats.current_capture_fps:.1f} | "
                 f"Distribute FPS: {stats.current_distribute_fps:.1f} | "
-                f"Dropped: {stats.frames_dropped}"
+                f"Decode: {stats.decode_time_ms:.1f}ms | "
+                f"Latency: {stats.buffer_latency_ms:.1f}ms"
             )
 
-    pipeline.register_callback(demo_callback)
+    pipeline.register_callback(demo_callback, fps=5)
 
     # Run
     print("Smart Cabin - Video Pipeline Demo")
     print("=" * 50)
-    print(f"RTSP URL: {config.camera.url}")
-    print(f"Process FPS: {config.camera.process_fps}")
+    print(f"RTSP URL: {_mask_url(config.camera.url)}")
     print("Press Ctrl+C to stop\n")
 
     pipeline.start()
@@ -528,5 +564,4 @@ if __name__ == "__main__":
     print(f"\nFinal stats:")
     print(f"  Frames captured: {stats.frames_captured}")
     print(f"  Frames distributed: {stats.frames_distributed}")
-    print(f"  Frames dropped: {stats.frames_dropped}")
     print(f"  Reconnections: {stats.reconnect_count}")

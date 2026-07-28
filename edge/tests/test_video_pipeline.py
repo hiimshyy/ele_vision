@@ -3,16 +3,16 @@ Tests for edge/core/video_pipeline.py - Video Pipeline System.
 
 Covers:
 - Pipeline lifecycle (start, stop, state transitions)
-- Frame callback registration/unregistration
-- FPS throttling (capture vs distribute rate)
-- Ring buffer behavior (bounded, drops oldest)
+- Frame callback registration/unregistration with per-callback FPS
+- Frame scheduling (per-callback FPS control)
+- Latest frame buffer (single frame, no ring buffer)
 - Reconnection logic on stream failure
 - Thread safety of callback invocation
 """
 
 import threading
 import time
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -22,6 +22,7 @@ from edge.core.video_pipeline import (
     VideoPipeline,
     PipelineState,
     FrameData,
+    ScheduledCallback,
 )
 
 
@@ -35,7 +36,7 @@ def camera_config():
         url="rtsp://fake-camera:554/stream",
         capture_fps=25,
         process_fps=10,
-        reconnect_interval=0.1,  # Fast reconnect for tests
+        reconnect_interval=0.1,
         max_reconnect_attempts=3,
     )
 
@@ -78,7 +79,6 @@ class MockVideoCapture:
 
         self._frame_count += 1
 
-        # Simulate stream failure after N frames
         if self._fail_after and self._frame_count > self._fail_after:
             return False, None
 
@@ -86,7 +86,6 @@ class MockVideoCapture:
             return False, None
 
         frame = make_fake_frame()
-        # Add frame_count as pixel value for identification
         frame[0, 0, 0] = self._frame_count % 256
         return True, frame
 
@@ -128,7 +127,7 @@ class TestPipelineLifecycle:
         mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=500)
 
         pipeline.start()
-        time.sleep(0.5)  # Give capture thread time to connect
+        time.sleep(0.5)
 
         assert pipeline.state == PipelineState.RUNNING
 
@@ -137,16 +136,15 @@ class TestPipelineLifecycle:
 
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_stop_terminates_threads(self, mock_cv2, pipeline):
-        """Stop should terminate capture and distribute threads."""
+        """Stop should terminate capture and scheduler threads."""
         mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=5000)
 
         pipeline.start()
         time.sleep(0.3)
         pipeline.stop()
 
-        # Threads should have terminated
         assert not pipeline._capture_thread.is_alive()
-        assert not pipeline._distribute_thread.is_alive()
+        assert not pipeline._scheduler_thread.is_alive()
 
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_double_start_ignored(self, mock_cv2, pipeline):
@@ -167,30 +165,39 @@ class TestFrameCallbacks:
     """Tests for callback registration and invocation."""
 
     def test_register_callback(self, pipeline):
-        """Should register a callback."""
+        """Should register a callback with FPS."""
+        def my_callback(frame, frame_id, timestamp):
+            pass
+
+        pipeline.register_callback(my_callback, fps=10)
+        assert len(pipeline._callbacks) == 1
+        assert pipeline._callbacks[0].target_fps == 10
+
+    def test_register_with_default_fps(self, pipeline):
+        """Default FPS should be 15."""
         def my_callback(frame, frame_id, timestamp):
             pass
 
         pipeline.register_callback(my_callback)
-        assert my_callback in pipeline._callbacks
+        assert pipeline._callbacks[0].target_fps == 15.0
 
     def test_unregister_callback(self, pipeline):
         """Should unregister a callback."""
         def my_callback(frame, frame_id, timestamp):
             pass
 
-        pipeline.register_callback(my_callback)
+        pipeline.register_callback(my_callback, fps=5)
         pipeline.unregister_callback(my_callback)
-        assert my_callback not in pipeline._callbacks
+        assert len(pipeline._callbacks) == 0
 
     def test_duplicate_register_ignored(self, pipeline):
         """Registering same callback twice should not duplicate."""
         def my_callback(frame, frame_id, timestamp):
             pass
 
-        pipeline.register_callback(my_callback)
-        pipeline.register_callback(my_callback)
-        assert pipeline._callbacks.count(my_callback) == 1
+        pipeline.register_callback(my_callback, fps=5)
+        pipeline.register_callback(my_callback, fps=10)
+        assert len(pipeline._callbacks) == 1
 
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_callback_receives_frames(self, mock_cv2, pipeline):
@@ -202,17 +209,14 @@ class TestFrameCallbacks:
         def collector(frame, frame_id, timestamp):
             received_frames.append((frame_id, timestamp))
 
-        pipeline.register_callback(collector)
+        pipeline.register_callback(collector, fps=10)
         pipeline.start()
 
-        # Wait for some frames to be distributed
-        time.sleep(0.8)
+        time.sleep(1.0)
         pipeline.stop()
 
         assert len(received_frames) > 0
-        # Frame IDs should be positive integers
         assert all(fid > 0 for fid, _ in received_frames)
-        # Timestamps should be reasonable
         assert all(ts > 0 for _, ts in received_frames)
 
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
@@ -228,19 +232,18 @@ class TestFrameCallbacks:
         def good_callback(frame, frame_id, timestamp):
             call_count["good"] += 1
 
-        pipeline.register_callback(bad_callback)
-        pipeline.register_callback(good_callback)
+        pipeline.register_callback(bad_callback, fps=10)
+        pipeline.register_callback(good_callback, fps=10)
         pipeline.start()
 
         time.sleep(0.8)
         pipeline.stop()
 
-        # Good callback should still receive frames despite bad one crashing
         assert call_count["good"] > 0
 
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_multiple_callbacks_all_invoked(self, mock_cv2, pipeline):
-        """All registered callbacks should receive each frame."""
+        """All registered callbacks should receive frames."""
         mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=500)
 
         counts = {"a": 0, "b": 0, "c": 0}
@@ -254,97 +257,107 @@ class TestFrameCallbacks:
         def callback_c(frame, frame_id, timestamp):
             counts["c"] += 1
 
-        pipeline.register_callback(callback_a)
-        pipeline.register_callback(callback_b)
-        pipeline.register_callback(callback_c)
+        pipeline.register_callback(callback_a, fps=10)
+        pipeline.register_callback(callback_b, fps=10)
+        pipeline.register_callback(callback_c, fps=10)
 
         pipeline.start()
         time.sleep(0.8)
         pipeline.stop()
 
-        # All callbacks should have received frames
         assert counts["a"] > 0
         assert counts["b"] > 0
         assert counts["c"] > 0
-        # All should receive same number of frames
-        assert counts["a"] == counts["b"] == counts["c"]
 
 
-# --- Test: FPS Throttling ---
+# --- Test: Per-Callback FPS Scheduling ---
 
 
-class TestFPSThrottling:
-    """Tests for FPS limiting between capture and distribution."""
+class TestFPSScheduling:
+    """Tests for per-callback FPS control."""
 
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
-    def test_distribute_fps_lower_than_capture(self, mock_cv2):
-        """Distribution rate should be <= configured process_fps."""
+    def test_different_fps_per_callback(self, mock_cv2):
+        """Callbacks with different FPS should receive frames at different rates."""
         config = CameraConfig(
             url="rtsp://fake/stream",
             capture_fps=25,
-            process_fps=5,  # Should distribute ~5 fps
+            process_fps=15,
             reconnect_interval=0.1,
             max_reconnect_attempts=0,
         )
         mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=5000)
 
         pipeline = VideoPipeline(config)
-        received = []
 
-        def collector(frame, frame_id, timestamp):
-            received.append(time.time())
+        counts = {"fast": 0, "slow": 0}
 
-        pipeline.register_callback(collector)
+        def fast_callback(frame, frame_id, timestamp):
+            counts["fast"] += 1
+
+        def slow_callback(frame, frame_id, timestamp):
+            counts["slow"] += 1
+
+        pipeline.register_callback(fast_callback, fps=20)
+        pipeline.register_callback(slow_callback, fps=5)
+
         pipeline.start()
-
-        time.sleep(2.0)  # Run for 2 seconds
+        time.sleep(2.0)
         pipeline.stop()
 
-        # At 5 fps for 2s, we expect ~10 frames (accounting for startup)
-        # Allow reasonable tolerance
-        assert 4 <= len(received) <= 15, f"Expected ~10 frames at 5fps, got {len(received)}"
+        # Fast should have ~4x more invocations than slow
+        assert counts["fast"] > counts["slow"]
+        ratio = counts["fast"] / max(counts["slow"], 1)
+        assert 2.0 <= ratio <= 6.0, f"Expected ratio ~4, got {ratio:.1f}"
 
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_stats_track_capture_and_distribute(self, mock_cv2, pipeline):
         """Stats should track both capture and distributed frame counts."""
         mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=5000)
 
+        def dummy(frame, frame_id, timestamp):
+            pass
+
+        pipeline.register_callback(dummy, fps=10)
         pipeline.start()
         time.sleep(1.0)
         pipeline.stop()
 
         stats = pipeline.stats
-        # Captured should be > distributed (due to throttling)
         assert stats.frames_captured > 0
         assert stats.frames_distributed > 0
         assert stats.frames_captured >= stats.frames_distributed
 
 
-# --- Test: Ring Buffer ---
+# --- Test: Latest Frame Buffer ---
 
 
-class TestRingBuffer:
-    """Tests for the bounded ring buffer behavior."""
+class TestLatestFrameBuffer:
+    """Tests for the single-frame latest buffer behavior."""
 
-    def test_buffer_max_size(self, pipeline):
-        """Buffer should be bounded at maxlen=30."""
-        assert pipeline._buffer.maxlen == 30
+    def test_no_frame_initially(self, pipeline):
+        """Latest frame should be None before start."""
+        assert pipeline._latest_frame is None
 
-    def test_buffer_drops_oldest_when_full(self, pipeline):
-        """When buffer is full, oldest frames should be dropped."""
-        # Manually fill buffer beyond capacity
-        for i in range(40):
-            frame_data = FrameData(
-                frame=make_fake_frame(),
-                frame_id=i + 1,
-                timestamp=time.time(),
-            )
-            pipeline._buffer.append(frame_data)
+    @patch("edge.core.video_pipeline.cv2.VideoCapture")
+    def test_latest_frame_always_newest(self, mock_cv2, pipeline):
+        """Buffer should always contain the most recent frame."""
+        mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=100)
 
-        # Buffer should only contain last 30 frames
-        assert len(pipeline._buffer) == 30
-        # Oldest frame should be #11 (first 10 were dropped)
-        assert pipeline._buffer[0].frame_id == 11
+        received_ids = []
+
+        def collector(frame, frame_id, timestamp):
+            received_ids.append(frame_id)
+
+        pipeline.register_callback(collector, fps=5)
+        pipeline.start()
+        time.sleep(1.0)
+        pipeline.stop()
+
+        # Frame IDs should be monotonically increasing (always newest)
+        assert len(received_ids) > 0
+        for i in range(1, len(received_ids)):
+            assert received_ids[i] > received_ids[i - 1]
 
 
 # --- Test: Reconnection ---
@@ -356,8 +369,6 @@ class TestReconnection:
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
     def test_reconnect_on_stream_failure(self, mock_cv2, pipeline):
         """Pipeline should attempt reconnection when stream drops."""
-        # First connection works for 5 frames, then fails
-        # Second connection works indefinitely
         call_count = {"n": 0}
 
         def create_capture(*args, **kwargs):
@@ -368,13 +379,15 @@ class TestReconnection:
 
         mock_cv2.side_effect = create_capture
 
+        def dummy(frame, frame_id, timestamp):
+            pass
+
+        pipeline.register_callback(dummy, fps=10)
         pipeline.start()
-        time.sleep(1.0)  # Give time for failure + reconnect + new frames
+        time.sleep(1.0)
         pipeline.stop()
 
-        # Should have reconnected
         assert pipeline.stats.reconnect_count >= 1
-        # Should have captured frames from both connections
         assert pipeline.stats.frames_captured > 5
 
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
@@ -392,10 +405,7 @@ class TestReconnection:
         pipeline = VideoPipeline(config)
         pipeline.start()
 
-        time.sleep(0.5)  # Wait for all attempts to fail
-
-        # After max attempts, capture loop exits. State should be ERROR.
-        # Give extra time for thread to finish
+        time.sleep(0.5)
         time.sleep(0.2)
         assert pipeline.state == PipelineState.ERROR
         pipeline.stop()
@@ -408,14 +418,13 @@ class TestReconnection:
             capture_fps=25,
             process_fps=5,
             reconnect_interval=0.05,
-            max_reconnect_attempts=0,  # Infinite
+            max_reconnect_attempts=0,
         )
 
         attempt_count = {"n": 0}
 
         def create_capture(*args, **kwargs):
             attempt_count["n"] += 1
-            # Succeed after 4 attempts
             if attempt_count["n"] >= 4:
                 return MockVideoCapture(frames_to_produce=500)
             return FailingVideoCapture()
@@ -423,12 +432,16 @@ class TestReconnection:
         mock_cv2.side_effect = create_capture
 
         pipeline = VideoPipeline(config)
+
+        def dummy(frame, frame_id, timestamp):
+            pass
+
+        pipeline.register_callback(dummy, fps=10)
         pipeline.start()
 
         time.sleep(1.0)
         pipeline.stop()
 
-        # Should have eventually connected
         assert attempt_count["n"] >= 4
         assert pipeline.stats.frames_captured > 0
 
@@ -440,7 +453,7 @@ class TestThreadSafety:
     """Tests for concurrent access patterns."""
 
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
-    def test_register_during_distribution(self, mock_cv2, pipeline):
+    def test_register_during_running(self, mock_cv2, pipeline):
         """Registering callbacks while pipeline is running should be safe."""
         mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=5000)
 
@@ -449,18 +462,17 @@ class TestThreadSafety:
         pipeline.start()
         time.sleep(0.5)
 
-        # Register callback while running
         def late_callback(frame, frame_id, timestamp):
             counts["late"] += 1
 
-        pipeline.register_callback(late_callback)
+        pipeline.register_callback(late_callback, fps=10)
         time.sleep(0.8)
         pipeline.stop()
 
         assert counts["late"] > 0
 
     @patch("edge.core.video_pipeline.cv2.VideoCapture")
-    def test_unregister_during_distribution(self, mock_cv2, pipeline):
+    def test_unregister_during_running(self, mock_cv2, pipeline):
         """Unregistering callbacks while pipeline is running should be safe."""
         mock_cv2.side_effect = lambda *args, **kwargs: MockVideoCapture(frames_to_produce=5000)
 
@@ -469,11 +481,10 @@ class TestThreadSafety:
         def counting_callback(frame, frame_id, timestamp):
             counts["total"] += 1
 
-        pipeline.register_callback(counting_callback)
+        pipeline.register_callback(counting_callback, fps=10)
         pipeline.start()
         time.sleep(0.5)
 
-        # Unregister while running
         pipeline.unregister_callback(counting_callback)
         count_at_unregister = counts["total"]
 
@@ -481,5 +492,4 @@ class TestThreadSafety:
         pipeline.stop()
 
         # Should not have received many more frames after unregister
-        # Allow a small margin for race condition
         assert counts["total"] - count_at_unregister <= 2

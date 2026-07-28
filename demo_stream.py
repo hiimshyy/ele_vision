@@ -211,7 +211,7 @@ def main():
 
     # Create display
     display = VideoDisplay(pipeline, scale=args.scale)
-    pipeline.register_callback(display.on_frame)
+    pipeline.register_callback(display.on_frame, fps=args.fps or camera_config.process_fps)
 
     # Start pipeline
     pipeline.start()

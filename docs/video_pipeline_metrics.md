@@ -3,11 +3,11 @@
 ## Pipeline Data Flow
 
 ```
-Camera (RTSP) → [decode] → Ring Buffer → [throttle] → Callbacks (Plugins)
-                  │                          │
-                  ├─ decode_time_ms           ├─ latency_ms
-                  │                          │
-              t_capture                  t_distribute
+Camera (RTSP) → [decode] → Latest Frame (1 frame) → Frame Scheduler → Per-plugin callbacks
+                  │                                        │
+                  ├─ decode_time_ms                         ├─ buffer_latency_ms
+                  │                                        │
+              t_capture                                t_schedule
 ```
 
 ## Metric Definitions
@@ -32,21 +32,19 @@ Camera (RTSP) → [decode] → Ring Buffer → [throttle] → Callbacks (Plugins
 - **Bình thường**: 5-20ms (1080p, LAN, software decode trên RK3399)
 - **Cảnh báo**: >40ms nghĩa là decode không kịp native FPS
 
-### latency_ms
-- **Đo từ**: Thời điểm frame được đặt vào ring buffer (`t_capture`) → Thời điểm frame được lấy ra và bắt đầu gửi cho plugins (`t_distribute`)
-- **Điểm đo**: Distribute thread, tính bằng `t_distribute - frame.timestamp`
-- **Bao gồm**: Thời gian chờ trong buffer + FPS throttling delay
+### buffer_latency_ms
+- **Đo từ**: Thời điểm frame được lưu vào latest buffer (`t_capture`) → Thời điểm scheduler lấy frame ra gửi cho plugins (`t_schedule`)
+- **Điểm đo**: Scheduler thread, tính bằng `t_schedule - frame.timestamp`
+- **Bao gồm**: Thời gian chờ trong buffer + scheduler tick delay
 - **KHÔNG bao gồm**: Decode time (đã tính riêng), plugin processing time
 - **Ý nghĩa**: Độ "cũ" của frame khi plugin nhận được. Ảnh hưởng trực tiếp đến realtime response
-- **Bình thường**: 10-70ms (phụ thuộc process_fps: 1000/fps = frame interval)
-- **Cảnh báo**: >200ms nghĩa là buffer đang backlog hoặc plugins xử lý chậm
+- **Bình thường**: 5-50ms (latest frame buffer nên rất thấp)
+- **Cảnh báo**: >100ms nghĩa là scheduler bị chậm
 
 ### queue_length
-- **Đo từ**: Số frame hiện có trong ring buffer tại thời điểm distribute lấy frame
-- **Điểm đo**: Distribute thread, trong buffer lock
-- **Ý nghĩa**: Nếu queue luôn cao → capture nhanh hơn distribute xử lý kịp
-- **Bình thường**: 1-3
-- **Cảnh báo**: >10 liên tục → cần giảm process_fps hoặc optimize plugins
+- **Đo từ**: Luôn là 0 hoặc 1 (latest frame buffer, không phải ring buffer)
+- **Điểm đo**: Scheduler thread
+- **Ý nghĩa**: 1 = có frame mới sẵn sàng, 0 = đang chờ frame
 
 ### resolution
 - **Đo từ**: `frame.shape` sau decode
@@ -74,15 +72,13 @@ Camera frame arrives
 │      ↓
 │   [network + decode]  ← decode_time_ms
 │      ↓
-├── t1: capture.read() returns, frame placed into buffer (frame.timestamp = t1)
+├── t1: capture.read() returns, frame stored as latest (frame.timestamp = t1)
 │      ↓
-│   [waiting in ring buffer]  ← queue wait
+│   [scheduler checks timing per callback]  ← buffer_latency_ms
 │      ↓
-│   [FPS throttling sleep]    ← throttle wait
+├── t2: scheduler invokes callback (when interval elapsed)
 │      ↓
-├── t2: distribute thread picks frame, sends to callbacks
-│      ↓
-│   latency_ms = t2 - t1
+│   buffer_latency_ms = t2 - t1
 │      ↓
 │   [plugin processing]  ← NOT measured here (plugin's responsibility)
 │      ↓
@@ -95,8 +91,8 @@ Tổng latency từ thực tế → hiển thị/phản ứng:
 
 ```
 Total = camera_encoding + network + decode_time + buffer_latency + plugin_processing
-      ≈ 30-50ms        + 1-5ms   + 5-20ms     + 10-70ms       + (varies)
-      ≈ 50-150ms typical (without plugin processing)
+      ≈ 30-50ms        + 1-5ms   + 5-20ms     + 5-50ms        + (varies)
+      ≈ 40-130ms typical (without plugin processing)
 ```
 
 ## Periodic Stats Log Format
@@ -110,8 +106,8 @@ event=periodic_stats | uptime_s=3600 | capture_fps=24.8 | distribute_fps=14.9 | 
 | Triệu chứng | Metric bất thường | Nguyên nhân có thể | Giải pháp |
 |-------------|-------------------|--------------------|-----------| 
 | Video giật | distribute_fps thấp | CPU overload | Giảm process_fps hoặc resolution |
-| Video trễ | latency_ms cao | Queue backlog | Giảm process_fps, optimize plugins |
-| Frame drop nhiều | queue_len = 30 (max) | Distribute không kịp | Giảm capture_fps hoặc tăng process_fps |
+| Video trễ | buffer_latency_ms cao | Scheduler bị block | Optimize plugin processing time |
+| Frame drop nhiều | N/A (latest buffer) | Không áp dụng | Latest buffer luôn có frame mới nhất |
 | Reconnect liên tục | reconnects tăng | Network không ổn định | Kiểm tra cable/WiFi, tăng connection_timeout |
 | CPU 100% | cpu_percent >90 | Decode + plugins quá nặng | Giảm resolution, giảm FPS, optimize inference |
 | RAM tăng liên tục | ram_used_mb tăng | Memory leak | Kiểm tra plugins, restart service |
