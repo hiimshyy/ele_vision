@@ -63,6 +63,11 @@ class PipelineStats:
     current_distribute_fps: float = 0.0
     last_frame_time: float = 0.0
     start_time: float = 0.0
+    # Video metrics
+    resolution: tuple[int, int] = (0, 0)  # (width, height)
+    decode_time_ms: float = 0.0  # Average decode time per frame
+    latency_ms: float = 0.0  # Capture-to-distribute latency
+    queue_length: int = 0  # Current buffer occupancy
 
 
 @dataclass
@@ -130,6 +135,10 @@ class VideoPipeline:
             current_distribute_fps=self._stats.current_distribute_fps,
             last_frame_time=self._stats.last_frame_time,
             start_time=self._stats.start_time,
+            resolution=self._stats.resolution,
+            decode_time_ms=self._stats.decode_time_ms,
+            latency_ms=self._stats.latency_ms,
+            queue_length=self._stats.queue_length,
         )
 
     def register_callback(self, callback: FrameCallback) -> None:
@@ -241,7 +250,9 @@ class VideoPipeline:
 
             # Read frames
             while not self._stop_event.is_set():
+                t_start = time.time()
                 ret, frame = self._capture.read()
+                decode_time = (time.time() - t_start) * 1000  # ms
 
                 if not ret:
                     uptime = time.time() - self._stats.start_time
@@ -258,7 +269,17 @@ class VideoPipeline:
                 self._frame_counter += 1
                 self._stats.frames_captured += 1
                 self._stats.last_frame_time = time.time()
+                self._stats.decode_time_ms = decode_time
                 fps_count += 1
+
+                # Track resolution (once or on change)
+                h, w = frame.shape[:2]
+                if self._stats.resolution != (w, h):
+                    self._stats.resolution = (w, h)
+                    logger.info(
+                        "event=resolution_detected | width={w} | height={h}",
+                        w=w, h=h,
+                    )
 
                 # Calculate capture FPS every second
                 elapsed = time.time() - fps_timer
@@ -372,6 +393,7 @@ class VideoPipeline:
             with self._buffer_lock:
                 if self._buffer:
                     frame_data = self._buffer[-1]  # Latest frame
+                    self._stats.queue_length = len(self._buffer)
                     self._buffer.clear()  # Drop older frames
                 else:
                     self._buffer_event.clear()
@@ -382,6 +404,9 @@ class VideoPipeline:
                 continue
 
             last_distribute_time = time.time()
+
+            # Track latency (capture → distribute)
+            self._stats.latency_ms = (last_distribute_time - frame_data.timestamp) * 1000
 
             # Distribute to callbacks
             self._invoke_callbacks(frame_data)
@@ -433,11 +458,16 @@ class VideoPipeline:
             logger.info(
                 "event=periodic_stats | uptime_s={uptime:.0f} "
                 "| capture_fps={cfps:.1f} | distribute_fps={dfps:.1f} "
+                "| resolution={res} | decode_ms={decode:.1f} | latency_ms={lat:.1f} | queue_len={qlen} "
                 "| reconnects={reconnects} "
                 "| cpu_percent={cpu:.1f} | ram_used_mb={ram_used:.0f} | ram_percent={ram_pct:.1f}",
                 uptime=uptime,
                 cfps=self._stats.current_capture_fps,
                 dfps=self._stats.current_distribute_fps,
+                res=f"{self._stats.resolution[0]}x{self._stats.resolution[1]}",
+                decode=self._stats.decode_time_ms,
+                lat=self._stats.latency_ms,
+                qlen=self._stats.queue_length,
                 reconnects=self._stats.reconnect_count,
                 cpu=cpu_percent,
                 ram_used=memory.used / (1024 * 1024),
