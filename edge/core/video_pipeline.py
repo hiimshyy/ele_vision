@@ -405,25 +405,27 @@ class VideoPipeline:
         """
         Frame scheduler: invoke each callback at its own target FPS.
 
-        Runs at tick rate = max(all registered FPS), checks each callback's
+        Ticks at the fastest registered FPS rate, checks each callback's
         timing independently.
         """
         fps_timer = time.time()
         fps_count = 0
 
         while not self._stop_event.is_set():
-            # Wait for a new frame to be available
-            self._frame_event.wait(timeout=1.0)
-
-            if self._stop_event.is_set():
-                break
+            # Wait until first frame arrives
+            if self._latest_frame is None:
+                self._frame_event.wait(timeout=1.0)
+                self._frame_event.clear()
+                if self._stop_event.is_set():
+                    break
+                continue
 
             # Get latest frame
             with self._frame_lock:
                 frame_data = self._latest_frame
 
             if frame_data is None:
-                self._frame_event.clear()
+                time.sleep(0.01)
                 continue
 
             # Track buffer latency
@@ -459,12 +461,18 @@ class VideoPipeline:
                 fps_count = 0
                 fps_timer = time.time()
 
-            # Small sleep to avoid busy-waiting
-            # Tick at max registered FPS rate
+            # Sleep until next tick (shortest interval among callbacks)
             min_interval = self._get_min_interval()
-            self._frame_event.clear()
-            if min_interval > 0:
-                time.sleep(min_interval * 0.5)  # Sleep half interval, check next
+            # Find time until next callback needs invocation
+            next_due = min_interval
+            for sc in callbacks:
+                time_since_last = now - sc.last_invoked
+                remaining = sc.interval - time_since_last
+                if remaining > 0:
+                    next_due = min(next_due, remaining)
+
+            if next_due > 0.001:
+                time.sleep(next_due)
 
     def _get_min_interval(self) -> float:
         """Get the smallest interval among registered callbacks."""
