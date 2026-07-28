@@ -213,6 +213,24 @@ def main():
     display = VideoDisplay(pipeline, scale=args.scale)
     pipeline.register_callback(display.on_frame, fps=args.fps or camera_config.process_fps)
 
+    # --- Simulated plugins for integration testing ---
+
+    # Slow plugin: simulates heavy processing (300ms per frame)
+    def slow_plugin(frame: np.ndarray, frame_id: int, timestamp: float) -> None:
+        time.sleep(0.3)
+        logger.info(
+            "event=slow_plugin_processed | frame_id={fid} | delay_ms=300",
+            fid=frame_id,
+        )
+
+    pipeline.register_callback(slow_plugin, fps=2)
+
+    # Crashing plugin: always raises exception
+    def crashing_plugin(frame: np.ndarray, frame_id: int, timestamp: float) -> None:
+        raise RuntimeError(f"Intentional crash at frame {frame_id}")
+
+    pipeline.register_callback(crashing_plugin, fps=5)
+
     # Start pipeline
     pipeline.start()
 
