@@ -26,7 +26,13 @@ import numpy as np
 
 from edge.core.config import CameraConfig, load_config
 from edge.core.video_pipeline import VideoPipeline, PipelineState
+from edge.core.event_bus import EventBus
 from edge.core.logging_setup import setup_logging, get_logger
+from shared.event_schemas import (
+    EventType,
+    FaceRecognizedEvent,
+    SystemErrorEvent,
+)
 
 logger = get_logger("system")
 plugin_logger = get_logger("plugin")
@@ -34,10 +40,22 @@ plugin_logger = get_logger("plugin")
 
 # --- Simulated Plugins ---
 
+# Global event bus
+event_bus = EventBus()
+
 
 def slow_plugin(frame: np.ndarray, frame_id: int, timestamp: float) -> None:
     """Simulates heavy AI processing (300ms per frame)."""
     time.sleep(0.3)
+    # Publish a fake recognition event every 5th invocation
+    if frame_id % 100 == 0:
+        event_bus.publish(FaceRecognizedEvent(
+            source="slow_plugin",
+            person_id="test-001",
+            person_name="Test User",
+            confidence=0.88,
+            bbox=[100, 50, 200, 200],
+        ))
     plugin_logger.info(
         "event=slow_plugin_done | frame_id={fid} | process_ms=300",
         fid=frame_id,
@@ -165,6 +183,15 @@ def main():
     # Create pipeline
     pipeline = VideoPipeline(camera_config)
 
+    # --- Event Bus: subscribe to events for monitoring ---
+    def on_event(event):
+        logger.info(
+            "event=bus_received | type={etype} | source={src}",
+            etype=event.event_type.value, src=event.source,
+        )
+
+    event_bus.subscribe("*", on_event)
+
     # Register plugins
     display = DisplayPlugin(pipeline, scale=args.scale)
     pipeline.register_callback(display.on_frame, fps=15)
@@ -192,8 +219,15 @@ def main():
     print(f"  Distribute FPS: {stats.current_distribute_fps:.1f}")
     print(f"  Reconnects: {stats.reconnect_count}")
     print(f"{'='*60}")
+    print(f"  Event Bus:")
+    print(f"    Published: {event_bus.stats.events_published}")
+    print(f"    Delivered: {event_bus.stats.events_delivered}")
+    print(f"    Handler Errors: {event_bus.stats.handler_errors}")
+    print(f"{'='*60}")
     print(f"  Check logs: cat logs/scheduler.log | grep plugin_stats")
     print(f"{'='*60}\n")
+
+    event_bus.shutdown()
 
 
 if __name__ == "__main__":
