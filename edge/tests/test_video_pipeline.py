@@ -606,13 +606,17 @@ class TestPluginIsolation:
         # Crashing plugin should have been called (errors were thrown)
         assert counts["errors_thrown"] > 0, "Crashing plugin was never called"
 
-        # Healthy plugin should have received frames normally
+        # Crashing plugin should be disabled after max_errors (5)
+        assert counts["errors_thrown"] == 5, (
+            f"Crashing plugin should be disabled after 5 errors, got {counts['errors_thrown']}"
+        )
+
+        # Healthy plugin should have received frames normally (not affected by crash)
         assert counts["good"] >= 10, (
             f"Healthy plugin should have at least 10 frames in 2s at 10fps, got {counts['good']}"
         )
 
-        # Both should have similar invocation counts (scheduler doesn't skip crashing one)
-        ratio = counts["good"] / max(counts["errors_thrown"], 1)
-        assert 0.5 <= ratio <= 2.0, (
-            f"Good/error ratio {ratio:.1f} too skewed - scheduler may be biased"
+        # Healthy plugin should have MORE frames than crashing (which was disabled)
+        assert counts["good"] > counts["errors_thrown"], (
+            "Healthy plugin should continue after crashing one is disabled"
         )

@@ -91,6 +91,10 @@ class ScheduledCallback:
     target_fps: float
     interval: float  # 1.0 / target_fps
     last_invoked: float = 0.0  # Timestamp of last invocation
+    # Error tracking
+    consecutive_errors: int = 0
+    max_errors: int = 5  # Disable after N consecutive errors
+    disabled: bool = False
 
 
 # --- Video Pipeline ---
@@ -443,6 +447,8 @@ class VideoPipeline:
                 callbacks = list(self._callbacks)
 
             for sc in callbacks:
+                if sc.disabled:
+                    continue
                 if now - sc.last_invoked >= sc.interval:
                     sc.last_invoked = now
                     self._executor.submit(self._invoke_callback, sc, frame_data)
@@ -483,11 +489,29 @@ class VideoPipeline:
         """Invoke a single callback in a thread pool worker (non-blocking)."""
         try:
             sc.callback(frame_data.frame, frame_data.frame_id, frame_data.timestamp)
+            # Reset error count on success
+            if sc.consecutive_errors > 0:
+                sc.consecutive_errors = 0
         except Exception as e:
-            sched_logger.error(
-                "event=callback_error | name={name} | error={err}",
-                name=sc.callback.__name__, err=str(e),
-            )
+            sc.consecutive_errors += 1
+            if sc.consecutive_errors >= sc.max_errors:
+                sc.disabled = True
+                sched_logger.warning(
+                    "event=callback_disabled | name={name} | reason=consecutive_errors "
+                    "| error_count={count} | last_error={err}",
+                    name=sc.callback.__name__,
+                    count=sc.consecutive_errors,
+                    err=str(e),
+                )
+            else:
+                sched_logger.error(
+                    "event=callback_error | name={name} | error={err} "
+                    "| consecutive={count}/{max}",
+                    name=sc.callback.__name__,
+                    err=str(e),
+                    count=sc.consecutive_errors,
+                    max=sc.max_errors,
+                )
 
     # --- Stats Thread ---
 
