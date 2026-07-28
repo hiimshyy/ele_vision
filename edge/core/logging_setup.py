@@ -31,8 +31,13 @@ def setup_logging(level: str = "INFO", log_dir: str | Path = "logs") -> None:
 
     Args:
         level: Minimum log level (DEBUG, INFO, WARNING, ERROR)
+               Or a LoggingConfig object (auto-extracts level and file path)
         log_dir: Directory for log files
     """
+    # Support passing LoggingConfig object directly
+    if hasattr(level, "level"):
+        log_dir = Path(level.file).parent if level.file else log_dir
+        level = level.level
     global LOG_DIR
     LOG_DIR = Path(log_dir)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
