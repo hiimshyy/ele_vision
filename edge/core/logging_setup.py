@@ -79,6 +79,28 @@ def setup_logging(level: str = "INFO", log_dir: str | Path = "logs") -> None:
         filter=lambda record: record["extra"].get("module") == "camera",
     )
 
+    # Scheduler module log
+    logger.add(
+        LOG_DIR / "scheduler.log",
+        level=level,
+        format=kv_format,
+        rotation="10 MB",
+        retention=5,
+        encoding="utf-8",
+        filter=lambda record: record["extra"].get("module") == "scheduler",
+    )
+
+    # Plugin module log
+    logger.add(
+        LOG_DIR / "plugin.log",
+        level=level,
+        format=kv_format,
+        rotation="10 MB",
+        retention=5,
+        encoding="utf-8",
+        filter=lambda record: record["extra"].get("module") == "plugin",
+    )
+
     # System module log
     logger.add(
         LOG_DIR / "system.log",

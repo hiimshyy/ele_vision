@@ -26,6 +26,7 @@ from edge.core.config import CameraConfig
 from edge.core.logging_setup import get_logger
 
 logger = get_logger("camera")
+sched_logger = get_logger("scheduler")
 
 
 # --- Helpers ---
@@ -176,7 +177,7 @@ class VideoPipeline:
                 last_invoked=0.0,
             )
             self._callbacks.append(scheduled)
-            logger.info(
+            sched_logger.info(
                 "event=callback_registered | name={name} | target_fps={fps}",
                 name=callback.__name__, fps=fps,
             )
@@ -187,7 +188,7 @@ class VideoPipeline:
             self._callbacks = [
                 sc for sc in self._callbacks if sc.callback is not callback
             ]
-            logger.info(
+            sched_logger.info(
                 "event=callback_unregistered | name={name}",
                 name=callback.__name__,
             )
@@ -443,7 +444,7 @@ class VideoPipeline:
                     try:
                         sc.callback(frame_data.frame, frame_data.frame_id, frame_data.timestamp)
                     except Exception as e:
-                        logger.error(
+                        sched_logger.error(
                             "event=callback_error | name={name} | error={err}",
                             name=sc.callback.__name__, err=str(e),
                         )
