@@ -32,7 +32,7 @@ logger = get_logger("system")
 plugin_logger = get_logger("plugin")
 
 # Default model path
-MODEL_PATH = Path("edge/plugins/face_recognition/models/yunet.onnx")
+MODEL_PATH = Path("edge/plugins/face_recognition/models/det_500m.onnx")
 
 
 class FaceDetectionDisplay:
@@ -222,12 +222,12 @@ def main():
         print("ERROR: No RTSP URL provided and no config.yaml found.")
         sys.exit(1)
 
-    # Load face detector
-    model_path = Path(args.model) if args.model else MODEL_PATH
+    # Load face detector (auto-detect model: SCRFD > YuNet)
+    model_path = Path(args.model) if args.model else None
     detector = FaceDetector()
-    if not detector.load(model_path, input_width=320, input_height=320, num_threads=2):
-        print(f"ERROR: Failed to load face detection model: {model_path}")
-        print("  Download model: bash edge/inference/download_models.sh")
+    if not detector.load(model_path=model_path, input_size=640):
+        print(f"ERROR: Failed to load face detection model")
+        print("  Download models: bash edge/inference/download_models.sh")
         sys.exit(1)
 
     # Info
@@ -238,7 +238,7 @@ def main():
     print(f"  Display FPS: {args.display_fps}")
     print(f"  Detection FPS: {args.det_fps}")
     print(f"  Confidence: {args.conf}")
-    print(f"  Model: {model_path.name}")
+    print(f"  Model: {detector.model_name}")
     print(f"  Backend: {detector.backend}")
     print(f"  Scale: {args.scale}")
     print("=" * 60)

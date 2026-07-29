@@ -29,7 +29,7 @@ Xây dựng một nền tảng Smart Cabin có kiến trúc plugin-based cho tha
 
 | Thành phần | Model | Lý do |
 |-----------|-------|-------|
-| Face Detection | **SCRFD-500M** hoặc **YuNet** | Siêu nhẹ (~0.5M params), <10ms trên ARM |
+| Face Detection | **SCRFD-500M** (det_500m.onnx from InsightFace buffalo_s) + YuNet fallback | High accuracy, 5-point landmarks |
 | Face Embedding | **MobileFaceNet** (từ InsightFace) | 1M params, 99.4% accuracy trên LFW, optimized cho mobile |
 | Inference Framework | **NCNN** (Tencent) | C++ native, tối ưu ARM NEON, không dependency nặng |
 
@@ -510,7 +510,7 @@ smart-cabin/
 | Edge OS | Ubuntu/Debian (ARM64) | Official support |
 | Edge Orchestration | Python 3.12+ | Fast development, good ML ecosystem |
 | Inference Engine | C++ + NCNN + pybind11 | Max performance trên ARM without NPU |
-| Face Detection | SCRFD-500M / YuNet | Ultra-lightweight, <10ms |
+| Face Detection | SCRFD-500M (det_500m.onnx) + YuNet fallback | High accuracy, landmarks for alignment |
 | Face Embedding | MobileFaceNet | 1M params, high accuracy |
 | Edge Database | SQLite | Lightweight, no server needed |
 | Edge REST API | FastAPI | Async, auto-docs (OpenAPI), lightweight |

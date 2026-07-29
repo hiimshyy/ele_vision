@@ -16,7 +16,7 @@ Nền tảng AI cho cabin thang máy, chạy trên Orange Pi 4 Pro với camera 
 - **Frame Scheduler** — Mỗi plugin nhận frames ở FPS riêng (Face: 5fps, Display: 15fps, Recorder: 1fps)
 - **Plugin Manager** — BasePlugin lifecycle (init → running → stopped), config-driven loading, auto-disable on crash
 - **Event Bus** — Thread-safe pub/sub, Pydantic validation, wildcard subscribe, event history
-- **Face Detection** — YuNet model via C++ NCNN hoặc OpenCV DNN fallback, ~10ms/frame
+- **Face Detection** — SCRFD-500M (det_500m.onnx, InsightFace) + YuNet fallback, ~10-15ms/frame
 - **Structured Logging** — Loguru, key-value format, module-based files (camera/scheduler/plugin/system)
 - **Per-plugin Metrics** — actual_fps, avg_process_ms, missed_deadlines, errors, disabled status
 
@@ -72,8 +72,8 @@ edge/
 │   └── logging_setup.py      # Loguru module-based logging
 ├── plugins/
 │   ├── face_recognition/
-│   │   ├── detector.py       # FaceDetector (NCNN + OpenCV fallback)
-│   │   └── models/           # YuNet ONNX/NCNN model files
+│   │   ├── detector.py       # FaceDetector (SCRFD primary + YuNet fallback)
+│   │   └── models/           # det_500m.onnx (SCRFD), yunet.onnx
 │   └── dummy/
 │       └── plugin.py         # Test plugin (frame counter)
 ├── inference/

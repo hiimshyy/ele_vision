@@ -23,11 +23,12 @@ from edge.plugins.face_recognition.detector import FaceDetector, FaceInfo
 
 MODEL_DIR = Path("edge/plugins/face_recognition/models")
 YUNET_ONNX = MODEL_DIR / "yunet.onnx"
+SCRFD_ONNX = MODEL_DIR / "det_500m.onnx"
 
 
 def has_model():
-    """Check if model file exists."""
-    return YUNET_ONNX.exists()
+    """Check if any model file exists."""
+    return SCRFD_ONNX.exists() or YUNET_ONNX.exists()
 
 
 @pytest.fixture
@@ -36,7 +37,7 @@ def detector():
     if not has_model():
         pytest.skip("Model not downloaded. Run: bash edge/inference/download_models.sh")
     det = FaceDetector()
-    ok = det.load(YUNET_ONNX, input_width=320, input_height=320)
+    ok = det.load()  # Auto-detect: SCRFD > YuNet
     assert ok, "Failed to load model"
     return det
 
@@ -67,14 +68,14 @@ class TestDetectorLoading:
     """Tests for model loading."""
 
     def test_load_opencv_backend(self):
-        """Should load with OpenCV backend when ONNX file exists."""
+        """Should load with available backend when model exists."""
         if not has_model():
             pytest.skip("Model not downloaded")
 
         det = FaceDetector()
-        ok = det.load(YUNET_ONNX)
+        ok = det.load()
         assert ok
-        assert det.backend == "opencv"
+        assert det.backend in ("scrfd", "yunet")
 
     def test_load_nonexistent_model(self):
         """Should return False for non-existent model."""
@@ -83,16 +84,15 @@ class TestDetectorLoading:
         assert not ok
         assert det.backend is None
 
-    def test_ncnn_fallback_to_opencv(self):
-        """When NCNN not available, should fallback to OpenCV."""
+    def test_fallback_to_yunet(self):
+        """Should fallback to YuNet when specified, or use SCRFD."""
         if not has_model():
             pytest.skip("Model not downloaded")
 
         det = FaceDetector()
-        ok = det.load(YUNET_ONNX)
+        ok = det.load()
         assert ok
-        # On dev machine without C++ build, should use opencv
-        assert det.backend in ("ncnn", "opencv")
+        assert det.backend in ("scrfd", "yunet")
 
 
 # --- Test: Face Detection ---
