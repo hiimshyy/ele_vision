@@ -369,16 +369,21 @@ class VideoPipeline:
                 url=_mask_url(self._config.url), attempt=attempts,
             )
 
-            # Set connection timeout
-            timeout_ms = int(self._config.connection_timeout * 1000)
-            self._capture = cv2.VideoCapture(
-                source,
-                cv2.CAP_ANY,
-                [
-                    cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout_ms,
-                    cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout_ms,
-                ],
-            )
+            # Open camera - use timeout params only for network streams (not local cameras)
+            if isinstance(source, int):
+                # Local camera (USB/V4L2) - no timeout params
+                self._capture = cv2.VideoCapture(source)
+            else:
+                # Network stream (RTSP) - apply timeout
+                timeout_ms = int(self._config.connection_timeout * 1000)
+                self._capture = cv2.VideoCapture(
+                    source,
+                    cv2.CAP_ANY,
+                    [
+                        cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout_ms,
+                        cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout_ms,
+                    ],
+                )
 
             if self._capture.isOpened():
                 logger.info("event=connected")
