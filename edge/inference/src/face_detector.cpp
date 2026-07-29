@@ -1,7 +1,7 @@
 #include "face_detector.h"
 
-#include <ncnn/net.h>
-#include <ncnn/mat.h>
+#include <net.h>
+#include <mat.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
