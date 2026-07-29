@@ -6,17 +6,19 @@ Nền tảng AI cho cabin thang máy, chạy trên Orange Pi 4 Pro với camera 
 
 | Component | Spec |
 |-----------|------|
-| SBC | Orange Pi 4 Pro (RK3399, 6-core ARM, 4GB RAM) |
-| Camera | IP Camera with RTSP stream |
-| Inference | CPU (ARM NEON) via NCNN |
+| SBC | Orange Pi 4 Pro (RK3399, 6-core ARM, 4GB RAM, Debian 12) |
+| Camera | IP Camera with RTSP stream (1920x1080) |
+| Inference | C++ NCNN (ARM NEON) + OpenCV DNN fallback |
 
 ## Features (Current)
 
-- **Video Pipeline** — RTSP capture with auto-reconnect, latest frame buffer, per-callback FPS scheduling
-- **Plugin Architecture** — Extensible module system for AI tasks
-- **Structured Logging** — Loguru, key-value format, module-based log files, periodic system stats
-- **Edge REST API** — FastAPI for remote management
-- **MQTT** — Realtime events for cloud integration
+- **Video Pipeline** — RTSP capture, latest frame buffer, per-callback FPS scheduling, auto-reconnect
+- **Frame Scheduler** — Mỗi plugin nhận frames ở FPS riêng (Face: 5fps, Display: 15fps, Recorder: 1fps)
+- **Plugin Manager** — BasePlugin lifecycle (init → running → stopped), config-driven loading, auto-disable on crash
+- **Event Bus** — Thread-safe pub/sub, Pydantic validation, wildcard subscribe, event history
+- **Face Detection** — YuNet model via C++ NCNN hoặc OpenCV DNN fallback, ~10ms/frame
+- **Structured Logging** — Loguru, key-value format, module-based files (camera/scheduler/plugin/system)
+- **Per-plugin Metrics** — actual_fps, avg_process_ms, missed_deadlines, errors, disabled status
 
 ## Quick Start
 
@@ -30,14 +32,32 @@ uv venv --python 3.12
 uv pip install -e .
 uv pip install opencv-python numpy loguru psutil
 
-# Run demo stream
-uv run python demo_stream.py --url "rtsp://USER:PASS@IP:554/stream" --scale 0.5
+# Download face detection model
+bash edge/inference/download_models.sh
 
-# Run with webcam
-uv run python demo_stream.py --url 0 --fps 15
+# Run examples
+python examples/run_camera.py --url "rtsp://USER:PASS@IP:554/stream" --scale 0.5
+python examples/run_face_detection.py --url "rtsp://..." --det-fps 5 --scale 0.5
+python examples/run_stress_test.py --url "rtsp://..." --duration 60
 
 # Run tests
-uv run pytest edge/tests/ -v
+pytest edge/tests/ -v
+```
+
+## Build C++ Inference (Optional, for max performance)
+
+```bash
+# Install build dependencies
+sudo apt install build-essential cmake git python3-dev libprotobuf-dev protobuf-compiler libomp-dev
+
+# Build (on Orange Pi, ~15 minutes first time)
+cd edge/inference
+mkdir build && cd build
+cmake .. -DPython3_EXECUTABLE=$(which python)
+make -j$(nproc)
+
+# Copy module
+cp cabin_inference_py.cpython-312*.so ../../plugins/face_recognition/
 ```
 
 ## Project Structure
@@ -46,16 +66,34 @@ uv run pytest edge/tests/ -v
 edge/
 ├── core/
 │   ├── config.py             # YAML config + env override
-│   ├── video_pipeline.py     # RTSP capture & frame distribution
-│   ├── logging_setup.py      # Loguru structured logging
-│   ├── event_bus.py          # (planned) Internal pub/sub
-│   ├── plugin_manager.py     # (planned) Plugin lifecycle
-│   └── cloud_sync.py         # (planned) MQTT client
+│   ├── video_pipeline.py     # RTSP capture + Frame Scheduler
+│   ├── event_bus.py          # Thread-safe pub/sub event system
+│   ├── plugin_manager.py     # Plugin lifecycle management
+│   └── logging_setup.py      # Loguru module-based logging
 ├── plugins/
-│   └── face_recognition/     # (planned) FR module
-├── api/                      # (planned) Edge REST API
-├── tools/                    # (planned) CLI utilities
-└── tests/
+│   ├── face_recognition/
+│   │   ├── detector.py       # FaceDetector (NCNN + OpenCV fallback)
+│   │   └── models/           # YuNet ONNX/NCNN model files
+│   └── dummy/
+│       └── plugin.py         # Test plugin (frame counter)
+├── inference/
+│   ├── CMakeLists.txt        # C++ build (NCNN + pybind11)
+│   ├── src/
+│   │   ├── face_detector.cpp
+│   │   └── python_bindings.cpp
+│   ├── include/face_detector.h
+│   ├── build_on_device.sh    # Build script for Orange Pi
+│   └── download_models.sh    # Model downloader
+├── tests/                    # 92+ tests
+└── config.yaml
+examples/
+├── run_camera.py             # Camera only + stats overlay
+├── run_face_detection.py     # Camera + realtime face detection
+└── run_stress_test.py        # Plugin isolation stress test
+docs/
+├── implementation_plan.md    # Full task breakdown
+├── video_pipeline_metrics.md # Metric definitions & troubleshooting
+└── log_inspection_guide.md   # How to read and analyze logs
 ```
 
 ## Configuration
@@ -69,6 +107,14 @@ camera:
   process_fps: 15
   reconnect_interval: 5.0
   connection_timeout: 10.0
+
+plugins:
+  modules:
+    - name: "face_recognition"
+      enabled: true
+      config:
+        detection_threshold: 0.7
+        min_face_size: 80
 
 mqtt:
   broker_host: "localhost"
@@ -87,31 +133,35 @@ Log files in `logs/`:
 
 | File | Content |
 |------|---------|
-| `camera.log` | Video pipeline events, FPS stats |
-| `system.log` | General system events |
+| `camera.log` | Video pipeline: connect, decode, reconnect, periodic stats |
+| `scheduler.log` | Frame scheduler: plugin FPS, errors, auto-disable, plugin_stats |
+| `plugin.log` | Plugin processing: init, ticks, shutdown |
+| `system.log` | Event bus, pipeline start/stop |
 | `all.log` | Everything combined |
 
-Format (key-value, parseable):
+Format (key-value):
 ```
 2026-07-28 10:00:30.456 | INFO     | camera     | event=periodic_stats | uptime_s=30 | capture_fps=24.8 | distribute_fps=14.9 | resolution=1920x1080 | decode_ms=8.3 | buffer_latency_ms=12.5 | reconnects=0 | cpu_percent=23.5 | ram_used_mb=512 | ram_percent=12.8
+2026-07-28 10:00:30.457 | INFO     | scheduler  | event=plugin_stats | plugin=on_frame | target_fps=15 | actual_fps=14.9 | avg_process_ms=4.5 | missed_deadlines=0 | errors=0 | disabled=False
 ```
 
-## Demo Stream Controls
+See [docs/log_inspection_guide.md](docs/log_inspection_guide.md) for full analysis guide.
 
-| Key | Action |
-|-----|--------|
-| `q` / `ESC` | Quit |
-| `s` | Print stats to console |
+## Examples
 
-Overlay displays: FPS, Resolution, Uptime, Latency, Reconnects
+| Script | Purpose |
+|--------|---------|
+| `run_camera.py` | Camera stream + overlay (FPS, uptime, latency, reconnects) |
+| `run_face_detection.py` | Realtime face detection with bbox + landmarks |
+| `run_stress_test.py` | Plugin isolation: slow (300ms), crashing, dummy plugins |
 
 ## Roadmap
 
 - [x] Task 1: Project structure & Config system
-- [x] Task 2: Video Pipeline (RTSP, auto-reconnect, per-callback FPS scheduler)
-- [ ] Task 3: Event Bus
-- [ ] Task 4: Plugin Manager
-- [ ] Task 5: Face Detection (C++ NCNN)
+- [x] Task 2: Video Pipeline (RTSP, latest frame buffer, per-callback FPS scheduler)
+- [x] Task 3: Event Bus (pub/sub, validation, wildcard, history)
+- [x] Task 4: Plugin Manager (BasePlugin, lifecycle, config-driven, auto-disable)
+- [x] Task 5: Face Detection (C++ NCNN + OpenCV DNN fallback)
 - [ ] Task 6: Face Embedding (MobileFaceNet)
 - [ ] Task 7: Face Recognition Plugin
 - [ ] Task 8: Data Collection & Auto-Snapshot
