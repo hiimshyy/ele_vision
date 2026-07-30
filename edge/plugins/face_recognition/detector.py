@@ -9,6 +9,7 @@ Both produce: list of FaceInfo with bbox, score, 5-point landmarks.
 """
 
 import time
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -69,6 +70,7 @@ class FaceDetector:
         self._inference_time_ms: float = 0.0
         self._input_size: int = 640
         self._model_name: str = ""
+        self._lock = threading.Lock()  # OpenCV DNN is NOT thread-safe
 
     @property
     def backend(self) -> str | None:
@@ -192,12 +194,13 @@ class FaceDetector:
         blob = cv2.dnn.blobFromImage(padded, 1.0 / 128.0, (input_size, input_size),
                                      (127.5, 127.5, 127.5), swapRB=True)
 
-        # Inference
-        t_start = time.time()
-        self._net.setInput(blob)
-        output_names = self._net.getUnconnectedOutLayersNames()
-        outputs = self._net.forward(output_names)
-        self._inference_time_ms = (time.time() - t_start) * 1000
+        # Inference (locked - cv2.dnn.Net is NOT thread-safe)
+        with self._lock:
+            t_start = time.time()
+            self._net.setInput(blob)
+            output_names = self._net.getUnconnectedOutLayersNames()
+            outputs = self._net.forward(output_names)
+            self._inference_time_ms = (time.time() - t_start) * 1000
 
         # Decode
         has_kps = len(outputs) == 9
