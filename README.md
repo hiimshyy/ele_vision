@@ -19,6 +19,8 @@ Nền tảng AI cho cabin thang máy, chạy trên Orange Pi 4 Pro với camera 
 - **Face Detection** — SCRFD-500M (det_500m.onnx, InsightFace) + YuNet fallback, ~10-15ms/frame
 - **Face Embedding** — MobileFaceNet (w600k_mbf.onnx), 512-dim vectors, cosine similarity matching
 - **Face Alignment** — 5-point landmark similarity transform → 112×112 canonical pose
+- **Face Tracking** — Lightweight IoU tracker, reduces embedding calls 80-90%, identity stability
+- **Face Database** — SQLite face storage, cosine similarity matching, CRUD operations
 - **Structured Logging** — Loguru, key-value format, module-based files (camera/scheduler/plugin/system)
 - **Per-plugin Metrics** — actual_fps, avg_process_ms, missed_deadlines, errors, disabled status
 
@@ -84,6 +86,9 @@ edge/
 │   │   ├── detector.py       # FaceDetector (SCRFD primary + YuNet fallback)
 │   │   ├── alignment.py      # Face alignment (5-point → 112×112)
 │   │   ├── embedder.py       # FaceEmbedder (MobileFaceNet) + cosine similarity
+│   │   ├── tracker.py        # Lightweight IoU face tracker
+│   │   ├── database.py       # SQLite face database (CRUD + matching)
+│   │   ├── plugin.py         # Face Recognition plugin (full pipeline)
 │   │   └── models/           # det_500m.onnx (SCRFD), w600k_mbf.onnx (embedding)
 │   └── dummy/
 │       └── plugin.py         # Test plugin (frame counter)
@@ -168,6 +173,7 @@ See [docs/log_inspection_guide.md](docs/log_inspection_guide.md) for full analys
 | `run_camera.py` | Camera stream + overlay (FPS, uptime, latency, reconnects) |
 | `run_face_detection.py` | Realtime face detection with bbox + landmarks |
 | `run_face_embedding.py` | Face embedding extraction, alignment, comparison |
+| `run_recognition.py` | Full pipeline: enroll, test, realtime recognition |
 | `run_stress_test.py` | Plugin isolation: slow (300ms), crashing, dummy plugins |
 
 ## Roadmap
@@ -178,7 +184,7 @@ See [docs/log_inspection_guide.md](docs/log_inspection_guide.md) for full analys
 - [x] Task 4: Plugin Manager (BasePlugin, lifecycle, config-driven, auto-disable)
 - [x] Task 5: Face Detection (C++ NCNN + OpenCV DNN fallback)
 - [x] Task 6: Face Embedding (MobileFaceNet w600k_mbf, 512-dim, alignment + cosine similarity)
-- [ ] Task 7: Face Recognition Plugin
+- [x] Task 7: Face Recognition Plugin (tracker + database + full pipeline integration)
 - [ ] Task 8: Data Collection & Auto-Snapshot
 - [ ] Task 9: Face Enrollment CLI
 - [ ] Task 10: MQTT Client & Cloud Sync

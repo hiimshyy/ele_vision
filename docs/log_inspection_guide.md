@@ -179,7 +179,80 @@ grep "bus_subscribe" logs/system.log
 
 ---
 
-## 5. Troubleshooting Scenarios
+## 5. Face Recognition
+
+### Xem recognition events
+
+```bash
+# Ai được nhận diện?
+grep "face_recognized" logs/plugin.log | tail -10
+
+# Mặt lạ (unknown)?
+grep "face_unknown" logs/plugin.log | tail -10
+
+# Timeline nhận diện (cả recognized + unknown)
+grep "face_recognized\|face_unknown" logs/plugin.log | tail -20
+```
+
+### Tracker: track lifecycle
+
+```bash
+# Xem tracks được tạo/xóa
+grep "track_created\|track_removed" logs/plugin.log | tail -20
+
+# Đếm tracks tạo trong 1 phiên
+grep "track_created" logs/plugin.log | wc -l
+
+# Track bị remove vì lost quá lâu (người rời cabin)
+grep "track_removed" logs/plugin.log | tail -5
+```
+
+### Recognition stats (periodic, mỗi 5s)
+
+```bash
+# Stats gần nhất
+grep "recognition_stats" logs/plugin.log | tail -5
+
+# Theo dõi embedding ratio (lower = tracker tiết kiệm CPU tốt hơn)
+grep "recognition_stats" logs/plugin.log | grep -oP 'embeddings_extracted=\K[0-9]+'
+
+# Detection inference time
+grep "recognition_stats" logs/plugin.log | grep -oP 'det_ms=\K[0-9.]+'
+
+# Embedding inference time
+grep "recognition_stats" logs/plugin.log | grep -oP 'emb_ms=\K[0-9.]+'
+```
+
+### Database events
+
+```bash
+# Face enrollment/removal
+grep "face_added\|face_removed" logs/plugin.log
+
+# Database init
+grep "database_initialized\|database_closed" logs/plugin.log
+```
+
+### Model loading
+
+```bash
+# Detector + embedder load status
+grep "detector_loaded\|embedder_loaded\|load_failed" logs/plugin.log
+```
+
+### Đánh giá Face Recognition
+
+| Metric | Bình thường | Cảnh báo | Hành động |
+|--------|-------------|----------|-----------|
+| det_ms | <15ms (PC), <150ms (OPi) | >200ms | Giảm input_size hoặc process_fps |
+| emb_ms | <5ms (PC), <100ms (OPi) | >150ms | Bình thường nếu tracker giảm calls |
+| embeddings/frame | <0.5 (tracker hoạt động) | ~1.0 | Tracker không match — kiểm tra IoU threshold |
+| active_tracks | 0-6 | >8 | max_tracks đang bị hit |
+| face_quality_rejected | Occasional | Liên tục | Camera mờ hoặc min_face_quality quá cao |
+
+---
+
+## 6. Troubleshooting Scenarios
 
 ### Scenario: Video bị giật / FPS thấp
 
@@ -234,9 +307,41 @@ grep "periodic_stats" logs/camera.log | grep -oP 'ram_used_mb=\K[0-9.]+' | head 
 grep "periodic_stats" logs/camera.log | grep -oP 'ram_used_mb=\K[0-9.]+' | tail -1
 ```
 
+### Scenario: Không nhận diện được (luôn UNKNOWN)
+
+```bash
+# 1. Database có faces không?
+grep "database_initialized" logs/plugin.log | tail -1
+grep "recognition_stats" logs/plugin.log | tail -1 | grep -oP 'db_persons=\K[0-9]+'
+
+# 2. Embedding có extract được không?
+grep "recognition_stats" logs/plugin.log | tail -3 | grep -oP 'embeddings_extracted=\K[0-9]+'
+
+# 3. Face bị reject vì quality?
+grep "face_quality_rejected\|face_align_failed" logs/plugin.log | tail -5
+
+# 4. Threshold quá cao?
+# Kiểm tra embedding_threshold trong config.yaml (default 0.4, thử giảm 0.3)
+grep "emb_threshold" logs/plugin.log
+```
+
+### Scenario: Recognition event spam (quá nhiều events)
+
+```bash
+# 1. Kiểm tra số events
+grep "face_recognized\|face_unknown" logs/plugin.log | wc -l
+
+# 2. Tracks bị tạo/xóa liên tục? (tracker IoU threshold quá cao)
+grep "track_created\|track_removed" logs/plugin.log | tail -20
+
+# 3. So sánh track count vs recognition events (should be 1:1)
+grep "track_created" logs/plugin.log | wc -l
+grep "face_recognized\|face_unknown" logs/plugin.log | wc -l
+```
+
 ---
 
-## 6. Real-time Monitoring
+## 7. Real-time Monitoring
 
 ```bash
 # Follow camera log (xem realtime)
@@ -254,7 +359,7 @@ tail -f logs/all.log | grep "ERROR\|WARNING"
 
 ---
 
-## 7. Log Rotation
+## 8. Log Rotation
 
 - Mỗi file log tự rotate khi đạt **10 MB**
 - Giữ tối đa **5 backup files** (vd: camera.log.1, camera.log.2, ...)

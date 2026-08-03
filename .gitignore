@@ -27,7 +27,6 @@ Thumbs.db
 # Models (large binary files)
 edge/plugins/face_recognition/models/*.bin
 edge/plugins/face_recognition/models/*.param
-edge/plugins/face_recognition/models/*.onnx
 
 # Training data (collected locally)
 data/
