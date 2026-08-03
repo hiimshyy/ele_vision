@@ -291,48 +291,81 @@ smart-cabin/
 
 ---
 
-### Task 6: C++ Inference Engine - Face Embedding (MobileFaceNet)
+### Task 6: C++ Inference Engine - Face Embedding (MobileFaceNet) ✅
 
-**Objective**: Thêm face embedding extraction vào C++ engine.
+**Objective**: Thêm face embedding extraction vào inference engine.
 
-**Implementation guidance**:
-- Implement `face_recognizer.cpp`: load MobileFaceNet NCNN model
-- Input: aligned face image (112x112), output: 128-dim embedding vector
-- Face alignment: dùng 5-point landmarks từ detector để affine transform
-- Normalize embedding vector (L2 norm)
-- Expose qua pybind11: `extract_embedding(aligned_face) -> numpy array`
-
-**Test requirements**:
-- Test embedding extraction trên known faces
-- Test embedding consistency (cùng người, khác ảnh → cosine similarity > 0.6)
-- Test embedding discrimination (khác người → cosine similarity < 0.4)
-- Test performance: measure inference time
-
-**Demo**: Extract embeddings từ 2 ảnh cùng người và 2 ảnh khác người, tính cosine similarity, verify discrimination. Report inference time.
+**Implementation (Python OpenCV DNN — same approach as Task 5)**:
+- `edge/plugins/face_recognition/alignment.py`: Face alignment với Umeyama similarity transform
+  - ArcFace 5-point reference landmarks (112×112)
+  - Input: frame + landmarks (10 floats) → Output: aligned 112×112 BGR
+- `edge/plugins/face_recognition/embedder.py`: FaceEmbedder class
+  - Model: w600k_mbf.onnx (MobileFaceNet from InsightFace buffalo_s)
+  - Input: aligned 112×112 BGR → Preprocess: (pixel-127.5)/127.5, BGR→RGB
+  - Output: 512-dim L2-normalized embedding vector
+  - Thread-safe (threading.Lock for OpenCV DNN)
+  - `cosine_similarity()`: pair comparison
+  - `cosine_similarity_batch()`: 1-vs-N gallery matching
+- Config: `embedding_model`, `embedding_threshold` in config.yaml
+- Example: `examples/run_face_embedding.py` (--image, --compare, --camera)
+- Tests: 30+ tests covering alignment, similarity, embedder loading/inference, pipeline
 
 ---
 
 ### Task 7: Face Recognition Plugin - Integration & Matching
 
-**Objective**: Tạo Face Recognition plugin hoàn chỉnh, kết nối detection + embedding + matching.
+**Objective**: Tạo Face Recognition plugin hoàn chỉnh, kết nối detection + **tracking** + embedding + matching.
 
 **Implementation guidance**:
-- Implement `edge/plugins/face_recognition/plugin.py` kế thừa BasePlugin
-- Implement `edge/plugins/face_recognition/database.py` - local SQLite face database
-- Pipeline: frame → detect faces → align → extract embedding → match against database
-- Matching: cosine similarity với threshold configurable (default 0.6)
-- Anti-spoofing cơ bản: reject faces quá nhỏ (< 80px), blur detection
-- Rate limiting: không recognize cùng 1 người liên tục (cooldown 30s)
-- Publish events: `face.recognized` (known) hoặc `face.unknown` (unknown)
+
+**Phần A - Lightweight Face Tracker** (`edge/plugins/face_recognition/tracker.py`):
+- IoU-based matching: match new detections → existing tracks (IoU > 0.5)
+- Track state: `track_id`, `bbox`, `landmarks`, `embedding`, `identity`, `confidence`, `last_seen_frame`, `frame_count`
+- Logic:
+  - New track (no IoU match) → trigger embedding extraction + database matching
+  - Existing track (already identified) → skip embedding (save CPU ~80-90%)
+  - Existing track (unidentified) → retry embedding mỗi N frames
+  - Periodic re-verify: re-extract embedding mỗi 2-3s cho active tracks (handle face changes)
+  - Remove stale tracks: khi mất detection > `max_lost_frames` (người rời cabin)
+- Config: `max_tracks: 10`, `iou_threshold: 0.5`, `max_lost_frames: 15`, `reverify_interval: 10`
+- Lợi ích:
+  - Giảm 80-90% embedding inference → CPU savings trên Orange Pi
+  - Stabilize identity (tránh flickering giữa "known" và "unknown")
+  - Tránh event spam (chỉ 1 event khi person xuất hiện, không phải mỗi frame)
+  - Cooldown logic tự nhiên (track-based thay vì time-based matching)
+
+**Phần B - Face Recognition Plugin** (`edge/plugins/face_recognition/plugin.py`):
+- Kế thừa BasePlugin
+- Pipeline mỗi frame:
+  1. Detect faces (detector.py)
+  2. Update tracker (IoU match detections → tracks)
+  3. Cho tracks mới/chưa identified: align → embed → match database
+  4. Publish events cho newly-identified tracks
+- Anti-spoofing cơ bản: reject faces quá nhỏ (< 80px), blur detection (Laplacian variance)
+
+**Phần C - Face Database** (`edge/plugins/face_recognition/database.py`):
+- Local SQLite face database
+- Schema: person_id, name, embedding (BLOB), created_at, updated_at
+- CRUD: add_face, remove_face, get_all, find_match(embedding, threshold)
+- Support multiple embeddings per person (average or best-match)
 
 **Test requirements**:
-- Test full pipeline: frame → detection → embedding → matching
-- Test với registered faces (should recognize)
+- Test tracker: IoU matching, track creation/deletion, stale track cleanup
+- Test tracker: same person across frames → same track_id
+- Test tracker: embedding chỉ extract khi track mới hoặc chưa identified
+- Test tracker: re-verify interval hoạt động đúng
+- Test full pipeline: frame → detection → tracking → embedding → matching
+- Test với registered faces (should recognize, 1 event per entry)
 - Test với unknown faces (should publish unknown event)
-- Test cooldown logic
+- Test cooldown logic (dựa track_id, không re-publish cho same track)
 - Test face database CRUD operations
+- Test database find_match with threshold
 
-**Demo**: Đăng ký 2-3 khuôn mặt vào database, chạy plugin với video stream, verify nhận diện đúng và publish events qua event bus.
+**Demo**: Đăng ký 2-3 khuôn mặt vào database, chạy plugin với video stream, verify:
+- Nhận diện đúng
+- Tracker giảm embedding calls (log số lần extract vs frames processed)
+- Chỉ publish 1 event khi người vào, không spam
+- Khi người rời camera > 3s → track removed → re-entry tạo event mới
 
 ---
 
@@ -511,7 +544,8 @@ smart-cabin/
 | Edge Orchestration | Python 3.12+ | Fast development, good ML ecosystem |
 | Inference Engine | C++ + NCNN + pybind11 | Max performance trên ARM without NPU |
 | Face Detection | SCRFD-500M (det_500m.onnx) + YuNet fallback | High accuracy, landmarks for alignment |
-| Face Embedding | MobileFaceNet | 1M params, high accuracy |
+| Face Embedding | MobileFaceNet (w600k_mbf.onnx) | 1M params, 512-dim, high accuracy |
+| Face Tracking | Lightweight IoU tracker | CPU savings 80-90%, identity stability |
 | Edge Database | SQLite | Lightweight, no server needed |
 | Edge REST API | FastAPI | Async, auto-docs (OpenAPI), lightweight |
 | Communication | MQTT (Mosquitto) | Lightweight IoT protocol, pub/sub |

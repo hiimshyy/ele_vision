@@ -29,6 +29,8 @@ plugins:
       config:
         detection_threshold: 0.7
         recognition_threshold: 0.6
+        embedding_model: "w600k_mbf.onnx"
+        embedding_threshold: 0.4
         min_face_size: 80
         cooldown_seconds: 30
 

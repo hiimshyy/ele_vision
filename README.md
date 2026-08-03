@@ -17,6 +17,8 @@ Nền tảng AI cho cabin thang máy, chạy trên Orange Pi 4 Pro với camera 
 - **Plugin Manager** — BasePlugin lifecycle (init → running → stopped), config-driven loading, auto-disable on crash
 - **Event Bus** — Thread-safe pub/sub, Pydantic validation, wildcard subscribe, event history
 - **Face Detection** — SCRFD-500M (det_500m.onnx, InsightFace) + YuNet fallback, ~10-15ms/frame
+- **Face Embedding** — MobileFaceNet (w600k_mbf.onnx), 512-dim vectors, cosine similarity matching
+- **Face Alignment** — 5-point landmark similarity transform → 112×112 canonical pose
 - **Structured Logging** — Loguru, key-value format, module-based files (camera/scheduler/plugin/system)
 - **Per-plugin Metrics** — actual_fps, avg_process_ms, missed_deadlines, errors, disabled status
 
@@ -29,15 +31,22 @@ cd ele_vision
 
 # Setup (requires Python 3.12+)
 uv venv --python 3.12
+source .venv/bin/activate        # Linux/macOS
+# .venv\Scripts\activate         # Windows
+
 uv pip install -e .
 uv pip install opencv-python numpy loguru psutil
 
 # Download face detection model
 bash edge/inference/download_models.sh
+# Also download embedding model (w600k_mbf.onnx from InsightFace buffalo_s)
+# Place in: edge/plugins/face_recognition/models/w600k_mbf.onnx
 
 # Run examples
 python examples/run_camera.py --url "rtsp://USER:PASS@IP:554/stream" --scale 0.5
 python examples/run_face_detection.py --url "rtsp://..." --det-fps 5 --scale 0.5
+python examples/run_face_embedding.py --image photo.jpg
+python examples/run_face_embedding.py --compare face1.jpg face2.jpg
 python examples/run_stress_test.py --url "rtsp://..." --duration 60
 
 # Run tests
@@ -73,7 +82,9 @@ edge/
 ├── plugins/
 │   ├── face_recognition/
 │   │   ├── detector.py       # FaceDetector (SCRFD primary + YuNet fallback)
-│   │   └── models/           # det_500m.onnx (SCRFD), yunet.onnx
+│   │   ├── alignment.py      # Face alignment (5-point → 112×112)
+│   │   ├── embedder.py       # FaceEmbedder (MobileFaceNet) + cosine similarity
+│   │   └── models/           # det_500m.onnx (SCRFD), w600k_mbf.onnx (embedding)
 │   └── dummy/
 │       └── plugin.py         # Test plugin (frame counter)
 ├── inference/
@@ -89,6 +100,7 @@ edge/
 examples/
 ├── run_camera.py             # Camera only + stats overlay
 ├── run_face_detection.py     # Camera + realtime face detection
+├── run_face_embedding.py     # Face embedding extraction + comparison
 └── run_stress_test.py        # Plugin isolation stress test
 docs/
 ├── implementation_plan.md    # Full task breakdown
@@ -114,6 +126,8 @@ plugins:
       enabled: true
       config:
         detection_threshold: 0.7
+        embedding_model: "w600k_mbf.onnx"
+        embedding_threshold: 0.4
         min_face_size: 80
 
 mqtt:
@@ -153,6 +167,7 @@ See [docs/log_inspection_guide.md](docs/log_inspection_guide.md) for full analys
 |--------|---------|
 | `run_camera.py` | Camera stream + overlay (FPS, uptime, latency, reconnects) |
 | `run_face_detection.py` | Realtime face detection with bbox + landmarks |
+| `run_face_embedding.py` | Face embedding extraction, alignment, comparison |
 | `run_stress_test.py` | Plugin isolation: slow (300ms), crashing, dummy plugins |
 
 ## Roadmap
@@ -162,7 +177,7 @@ See [docs/log_inspection_guide.md](docs/log_inspection_guide.md) for full analys
 - [x] Task 3: Event Bus (pub/sub, validation, wildcard, history)
 - [x] Task 4: Plugin Manager (BasePlugin, lifecycle, config-driven, auto-disable)
 - [x] Task 5: Face Detection (C++ NCNN + OpenCV DNN fallback)
-- [ ] Task 6: Face Embedding (MobileFaceNet)
+- [x] Task 6: Face Embedding (MobileFaceNet w600k_mbf, 512-dim, alignment + cosine similarity)
 - [ ] Task 7: Face Recognition Plugin
 - [ ] Task 8: Data Collection & Auto-Snapshot
 - [ ] Task 9: Face Enrollment CLI
