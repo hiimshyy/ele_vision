@@ -207,7 +207,7 @@ class CloudSync:
             self._client = mqtt.Client(
                 callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
                 client_id=self._client_id,
-                protocol=mqtt.MQTTv5,
+                protocol=mqtt.MQTTv311,
             )
 
             # Auth
@@ -377,7 +377,7 @@ class CloudSync:
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         """Called when connected to broker."""
-        if reason_code == 0:
+        if reason_code == 0 or reason_code == mqtt.CONNACK_ACCEPTED:
             self._connected = True
             self._stats.reconnect_count += 1
 
