@@ -31,7 +31,7 @@ plugins:
         recognition_threshold: 0.6
         embedding_model: "w600k_mbf.onnx"
         embedding_threshold: 0.4
-        min_face_size: 80
+        min_face_size: 60
         min_face_quality: 50.0
         cooldown_seconds: 30
         database_path: "data/db/faces.db"
@@ -41,7 +41,7 @@ plugins:
         tracker_max_tracks: 10
         tracker_reverify_interval: 15  # re-verify every 3s at 5fps
         # Auto-snapshot (save face crops on detection)
-        snapshot_enabled: false
+        snapshot_enabled: true
         snapshot_dir: "data/snapshots"
         snapshot_max_per_person_per_day: 10
         snapshot_save_full_frame: true

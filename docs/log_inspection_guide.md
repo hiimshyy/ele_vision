@@ -233,6 +233,19 @@ grep "face_added\|face_removed" logs/plugin.log
 grep "database_initialized\|database_closed" logs/plugin.log
 ```
 
+### Snapshot & Data Collection
+
+```bash
+# Auto-snapshot saves
+grep "snapshot_saved" logs/plugin.log | tail -10
+
+# Storage cleanup events
+grep "storage_cleanup" logs/system.log
+
+# Data recorder events
+grep "video_segment\|snapshot_captured\|recorder_connected" logs/system.log | tail -10
+```
+
 ### Model loading
 
 ```bash

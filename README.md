@@ -19,9 +19,10 @@ Nền tảng AI cho cabin thang máy, chạy trên Orange Pi 4 Pro với camera 
 - **Face Detection** — SCRFD-500M (det_500m.onnx, InsightFace) + YuNet fallback, ~10-15ms/frame
 - **Face Embedding** — MobileFaceNet (w600k_mbf.onnx), 512-dim vectors, cosine similarity matching
 - **Face Alignment** — 5-point landmark similarity transform → 112×112 canonical pose
-- **Face Tracking** — Lightweight IoU tracker, reduces embedding calls 80-90%, identity stability
-- **Face Database** — SQLite face storage, cosine similarity matching, CRUD operations
-- **Data Collection** — Video recorder, periodic snapshots, auto face crop on detection
+- **Face Tracking** — IoU + centroid distance tracker, reduces embedding calls 80-90%, handles fast movement
+- **Face Database** — SQLite face storage, cosine similarity matching, multi-embedding per person
+- **Data Collection** — Video recorder, periodic snapshots, auto face crop on detection (PNG lossless)
+- **OpenCV Display** — Realtime UI with bbox, name, confidence, face size, landmarks, stats bar
 - **Structured Logging** — Loguru, key-value format, module-based files (camera/scheduler/plugin/system)
 - **Per-plugin Metrics** — actual_fps, avg_process_ms, missed_deadlines, errors, disabled status
 
@@ -45,12 +46,19 @@ bash edge/inference/download_models.sh
 # Also download embedding model (w600k_mbf.onnx from InsightFace buffalo_s)
 # Place in: edge/plugins/face_recognition/models/w600k_mbf.onnx
 
-# Run examples
+# Run face recognition (enroll + recognize)
+python examples/run_recognition.py enroll --image face.jpg --name "Alice" --id p001
+python examples/run_recognition.py run --url 0 --snapshot
+
+# Run other examples
 python examples/run_camera.py --url "rtsp://USER:PASS@IP:554/stream" --scale 0.5
-python examples/run_face_detection.py --url "rtsp://..." --det-fps 5 --scale 0.5
-python examples/run_face_embedding.py --image photo.jpg
+python examples/run_face_detection.py --url 0 --det-fps 5 --scale 0.5
 python examples/run_face_embedding.py --compare face1.jpg face2.jpg
 python examples/run_stress_test.py --url "rtsp://..." --duration 60
+
+# Data collection
+python -m edge.tools.data_recorder --mode video --url 0 --duration 60
+python -m edge.tools.data_recorder --mode snapshot --url 0 --interval 5
 
 # Run tests
 pytest edge/tests/ -v
@@ -87,12 +95,16 @@ edge/
 │   │   ├── detector.py       # FaceDetector (SCRFD primary + YuNet fallback)
 │   │   ├── alignment.py      # Face alignment (5-point → 112×112)
 │   │   ├── embedder.py       # FaceEmbedder (MobileFaceNet) + cosine similarity
-│   │   ├── tracker.py        # Lightweight IoU face tracker
+│   │   ├── tracker.py        # IoU + centroid distance face tracker
 │   │   ├── database.py       # SQLite face database (CRUD + matching)
 │   │   ├── plugin.py         # Face Recognition plugin (full pipeline)
-│   │   └── models/           # det_500m.onnx (SCRFD), w600k_mbf.onnx (embedding)
+│   │   └── models/           # det_500m.onnx, w600k_mbf.onnx
 │   └── dummy/
 │       └── plugin.py         # Test plugin (frame counter)
+├── tools/
+│   ├── data_recorder.py      # Video/snapshot CLI recorder
+│   ├── storage_manager.py    # Disk usage auto-cleanup
+│   └── face_snapshot.py      # Auto face crop on detection (PNG lossless)
 ├── inference/
 │   ├── CMakeLists.txt        # C++ build (NCNN + pybind11)
 │   ├── src/
@@ -101,12 +113,13 @@ edge/
 │   ├── include/face_detector.h
 │   ├── build_on_device.sh    # Build script for Orange Pi
 │   └── download_models.sh    # Model downloader
-├── tests/                    # 92+ tests
+├── tests/                    # 222+ tests
 └── config.yaml
 examples/
 ├── run_camera.py             # Camera only + stats overlay
-├── run_face_detection.py     # Camera + realtime face detection
+├── run_face_detection.py     # Camera + realtime face detection (with face size display)
 ├── run_face_embedding.py     # Face embedding extraction + comparison
+├── run_recognition.py        # Full pipeline: enroll, list, test, run realtime, snapshot
 └── run_stress_test.py        # Plugin isolation stress test
 docs/
 ├── implementation_plan.md    # Full task breakdown
@@ -116,7 +129,7 @@ docs/
 
 ## Configuration
 
-Edit `config.yaml`:
+Edit `edge/config.yaml`:
 
 ```yaml
 camera:
@@ -134,7 +147,19 @@ plugins:
         detection_threshold: 0.7
         embedding_model: "w600k_mbf.onnx"
         embedding_threshold: 0.4
-        min_face_size: 80
+        min_face_size: 60
+        min_face_quality: 50.0
+        database_path: "data/db/faces.db"
+        # Tracker
+        tracker_iou_threshold: 0.4
+        tracker_max_lost: 15
+        tracker_max_tracks: 10
+        tracker_reverify_interval: 15
+        # Auto-snapshot (PNG lossless)
+        snapshot_enabled: false
+        snapshot_dir: "data/snapshots"
+        snapshot_max_per_person_per_day: 10
+        snapshot_save_full_frame: true
 
 mqtt:
   broker_host: "localhost"
@@ -146,6 +171,21 @@ logging:
 ```
 
 Override with environment variables: `SC_CAMERA_URL=rtsp://...`
+
+## Data Directory
+
+```
+data/
+├── db/
+│   └── faces.db              # SQLite database (embeddings + metadata)
+├── faces/
+│   └── {person_id}/          # Enrolled face images (aligned 112×112)
+├── snapshots/
+│   ├── faces/                # Auto-captured face crops (PNG)
+│   └── full/                 # Full frames (PNG, clean - no annotation)
+├── videos/                   # Recorded video segments
+└── frames/                   # Periodic snapshot captures
+```
 
 ## Logging
 
@@ -166,6 +206,33 @@ Format (key-value):
 ```
 
 See [docs/log_inspection_guide.md](docs/log_inspection_guide.md) for full analysis guide.
+
+## Face Recognition Usage
+
+```bash
+# 1. Enroll faces (from images)
+python examples/run_recognition.py enroll --image photo1.jpg --name "Nguyen Van A" --id p001
+python examples/run_recognition.py enroll --image photo2.jpg --name "Nguyen Van A" --id p001  # multiple angles
+
+# 2. List enrolled faces
+python examples/run_recognition.py list
+
+# 3. Test on single image
+python examples/run_recognition.py test --image test.jpg
+
+# 4. Run realtime recognition (OpenCV window)
+python examples/run_recognition.py run --url 0                    # webcam
+python examples/run_recognition.py run --url 0 --snapshot         # with auto-snapshot
+python examples/run_recognition.py run --url 0 --min-size 40      # detect smaller faces
+python examples/run_recognition.py run --url "rtsp://..." --scale 0.5  # RTSP camera
+
+# 5. Remove enrolled face
+python examples/run_recognition.py remove --id p001
+```
+
+Display overlay shows: bounding box (green=recognized, red=unknown), name + confidence + face size, 5-point landmarks, stats bar (display FPS, process FPS, tracks, inference times).
+
+Controls: `[q/ESC]` quit | `[s]` screenshot
 
 ## Examples
 

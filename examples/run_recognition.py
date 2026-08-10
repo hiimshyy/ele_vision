@@ -301,6 +301,17 @@ def cmd_run(args):
         reverify_interval=int(args.fps * 3),  # re-verify every 3s
     )
 
+    # Initialize auto-snapshot
+    snapshot = None
+    if args.snapshot:
+        from edge.tools.face_snapshot import FaceSnapshot
+        snapshot = FaceSnapshot(
+            snapshot_dir=args.snapshot_dir,
+            max_per_person_per_day=args.snapshot_max,
+            save_full_frame=True,
+        )
+        print(f"  Snapshot: enabled (dir={args.snapshot_dir}, max={args.snapshot_max}/person/day)")
+
     # Open camera
     url = args.url
     if url.isdigit():
@@ -434,6 +445,18 @@ def cmd_run(args):
 
                     track.event_published = True
 
+                    # Auto-snapshot
+                    if snapshot is not None:
+                        aligned_snap = align_face(frame, track.landmarks)
+                        snapshot.save_snapshot(
+                            aligned_face=aligned_snap,
+                            full_frame=frame,
+                            person_id=track.identity,
+                            person_name=track.identity_name,
+                            confidence=track.identity_confidence if track.identity else track.confidence,
+                            bbox=track.bbox,
+                        )
+
                 # Periodic stats log (every 5 seconds)
                 if frame_id % (int(args.fps) * 5) == 0:
                     active = len([t for t in tracks if t.state == TrackState.ACTIVE])
@@ -453,6 +476,8 @@ def cmd_run(args):
                 # Draw tracked faces (only ACTIVE tracks with valid state)
                 for track in tracker.active_tracks:
                     x1, y1, x2, y2 = [int(v) for v in track.bbox]
+                    face_w = x2 - x1
+                    face_h = y2 - y1
 
                     # Choose color based on state
                     if track.identity:
@@ -464,6 +489,9 @@ def cmd_run(args):
                     else:
                         color = COLOR_NEW
                         label = f"Track #{track.track_id}"
+
+                    # Add face size to label
+                    label += f" [{face_w}x{face_h}]"
 
                     # Draw bounding box
                     cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
@@ -600,9 +628,14 @@ Examples:
     p_run = subparsers.add_parser("run", help="Run realtime recognition")
     p_run.add_argument("--url", required=True, help="Camera URL or device index (0)")
     p_run.add_argument("--fps", type=float, default=5.0, help="Processing FPS (default: 5)")
-    p_run.add_argument("--min-size", type=int, default=80, help="Min face size in px")
+    p_run.add_argument("--min-size", type=int, default=60, help="Min face size in px (default: 60)")
     p_run.add_argument("--scale", type=float, default=1.0, help="Display scale (e.g. 0.5 for half)")
     p_run.add_argument("--no-display", action="store_true", help="Run headless (no window)")
+    p_run.add_argument("--snapshot", action="store_true", help="Enable auto face snapshot")
+    p_run.add_argument("--snapshot-dir", type=str, default="data/snapshots",
+                        help="Snapshot output directory (default: data/snapshots)")
+    p_run.add_argument("--snapshot-max", type=int, default=10,
+                        help="Max snapshots per person per day (default: 10)")
 
     args = parser.parse_args()
 

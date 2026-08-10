@@ -77,7 +77,7 @@ class FaceSnapshot:
         """Count total snapshot files."""
         count = 0
         if self._faces_dir.exists():
-            count += sum(1 for _ in self._faces_dir.rglob("*.jpg"))
+            count += sum(1 for _ in self._faces_dir.rglob("*.png"))
         return count
 
     def save_snapshot(self,
@@ -123,26 +123,14 @@ class FaceSnapshot:
 
         # Save aligned face crop
         if aligned_face is not None:
-            face_path = self._faces_dir / f"{prefix}.jpg"
+            face_path = self._faces_dir / f"{prefix}.png"
             cv2.imwrite(str(face_path), aligned_face)
             saved = True
 
-        # Save full frame with bbox annotation
-        if self._save_full and full_frame is not None and bbox is not None:
-            annotated = full_frame.copy()
-            x1, y1, x2, y2 = [int(v) for v in bbox]
-
-            # Draw bbox
-            color = (0, 200, 0) if person_id else (0, 0, 220)
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-
-            # Draw label
-            label = f"{person_name} ({confidence:.2f})" if person_id else f"Unknown ({confidence:.2f})"
-            cv2.putText(annotated, label, (x1, y1 - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-            full_path = self._full_dir / f"{prefix}.jpg"
-            cv2.imwrite(str(full_path), annotated)
+        # Save full frame (clean, no annotation — usable for re-enrollment/training)
+        if self._save_full and full_frame is not None:
+            full_path = self._full_dir / f"{prefix}.png"
+            cv2.imwrite(str(full_path), full_frame)
             saved = True
 
         if saved:

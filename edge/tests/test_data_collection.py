@@ -120,7 +120,7 @@ class TestFaceSnapshot:
         assert result is True
 
         # Check file exists
-        files = list((tmp_path / "faces").glob("*.jpg"))
+        files = list((tmp_path / "faces").glob("*.png"))
         assert len(files) == 1
         assert "recognized_p001" in files[0].name
 
@@ -138,7 +138,7 @@ class TestFaceSnapshot:
         )
         assert result is True
 
-        files = list((tmp_path / "faces").glob("*.jpg"))
+        files = list((tmp_path / "faces").glob("*.png"))
         assert len(files) == 1
         assert "unknown_" in files[0].name
 
@@ -157,7 +157,7 @@ class TestFaceSnapshot:
             bbox=(100, 50, 200, 200),
         )
 
-        full_files = list((tmp_path / "full").glob("*.jpg"))
+        full_files = list((tmp_path / "full").glob("*.png"))
         assert len(full_files) == 1
 
     def test_daily_limit(self, tmp_path):
