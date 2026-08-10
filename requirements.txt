@@ -11,7 +11,7 @@ opencv-python==5.0.0.93
 numpy==2.5.1
 
 # MQTT Communication (Task 10)
-# paho-mqtt==2.0.0
+paho-mqtt==2.1.0
 
 # Database
 # sqlite handled by stdlib

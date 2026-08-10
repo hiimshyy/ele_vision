@@ -436,7 +436,7 @@ smart-cabin/
 
 ---
 
-### Task 10: MQTT Client & Cloud Sync
+### Task 10: MQTT Client & Cloud Sync ✅
 
 **Objective**: Implement MQTT client trên edge để publish events và nhận commands từ cloud.
 
