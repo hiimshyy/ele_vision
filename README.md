@@ -21,6 +21,7 @@ Nền tảng AI cho cabin thang máy, chạy trên Orange Pi 4 Pro với camera 
 - **Face Alignment** — 5-point landmark similarity transform → 112×112 canonical pose
 - **Face Tracking** — Lightweight IoU tracker, reduces embedding calls 80-90%, identity stability
 - **Face Database** — SQLite face storage, cosine similarity matching, CRUD operations
+- **Data Collection** — Video recorder, periodic snapshots, auto face crop on detection
 - **Structured Logging** — Loguru, key-value format, module-based files (camera/scheduler/plugin/system)
 - **Per-plugin Metrics** — actual_fps, avg_process_ms, missed_deadlines, errors, disabled status
 
@@ -185,7 +186,7 @@ See [docs/log_inspection_guide.md](docs/log_inspection_guide.md) for full analys
 - [x] Task 5: Face Detection (C++ NCNN + OpenCV DNN fallback)
 - [x] Task 6: Face Embedding (MobileFaceNet w600k_mbf, 512-dim, alignment + cosine similarity)
 - [x] Task 7: Face Recognition Plugin (tracker + database + full pipeline integration)
-- [ ] Task 8: Data Collection & Auto-Snapshot
+- [x] Task 8: Data Collection & Auto-Snapshot
 - [ ] Task 9: Face Enrollment CLI
 - [ ] Task 10: MQTT Client & Cloud Sync
 - [ ] Task 11: Edge REST API

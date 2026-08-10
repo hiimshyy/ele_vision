@@ -28,6 +28,7 @@ from edge.plugins.face_recognition.alignment import align_face
 from edge.plugins.face_recognition.embedder import FaceEmbedder
 from edge.plugins.face_recognition.tracker import FaceTracker, TrackState
 from edge.plugins.face_recognition.database import FaceDatabase
+from edge.tools.face_snapshot import FaceSnapshot
 from shared.event_schemas import FaceRecognizedEvent, FaceUnknownEvent
 
 logger = get_logger("plugin")
@@ -71,6 +72,10 @@ class Plugin(BasePlugin):
             tracker_max_tracks: int (default 10)
             tracker_reverify_interval: int (default 15)
             database_path: str (default "faces.db")
+            snapshot_enabled: bool (default False)
+            snapshot_dir: str (default "data/snapshots")
+            snapshot_max_per_person_per_day: int (default 10)
+            snapshot_save_full_frame: bool (default True)
         """
         self._config = config
         self._event_bus = event_bus
@@ -110,6 +115,21 @@ class Plugin(BasePlugin):
         if not self._database.initialize():
             logger.error("event=plugin_init_failed | reason=database init failed")
             return False
+
+        # Initialize auto-snapshot (optional)
+        self._snapshot_enabled = config.get("snapshot_enabled", False)
+        self._snapshot: FaceSnapshot | None = None
+        if self._snapshot_enabled:
+            self._snapshot = FaceSnapshot(
+                snapshot_dir=config.get("snapshot_dir", "data/snapshots"),
+                max_per_person_per_day=config.get("snapshot_max_per_person_per_day", 10),
+                save_full_frame=config.get("snapshot_save_full_frame", True),
+            )
+            logger.info(
+                "event=snapshot_enabled | dir={d} | max_per_day={m}",
+                d=config.get("snapshot_dir", "data/snapshots"),
+                m=config.get("snapshot_max_per_person_per_day", 10),
+            )
 
         logger.info(
             "event=face_recognition_init | det_model={det} | emb_model={emb} | "
@@ -237,6 +257,18 @@ class Plugin(BasePlugin):
                 )
 
             track.event_published = True
+
+            # Auto-snapshot (save face crop + full frame)
+            if self._snapshot is not None:
+                aligned_for_snap = align_face(frame, track.landmarks)
+                self._snapshot.save_snapshot(
+                    aligned_face=aligned_for_snap,
+                    full_frame=frame,
+                    person_id=track.identity,
+                    person_name=track.identity_name,
+                    confidence=track.identity_confidence if track.identity else track.confidence,
+                    bbox=track.bbox,
+                )
 
         # Periodic stats (every 25 frames = 5s at 5fps)
         if self._frame_count % 25 == 0:

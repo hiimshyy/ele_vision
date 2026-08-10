@@ -369,7 +369,7 @@ smart-cabin/
 
 ---
 
-### Task 8: Data Collection Tool & Auto-Snapshot
+### Task 8: Data Collection Tool & Auto-Snapshot ✅
 
 **Objective**: Thu thập dữ liệu training từ camera — cả manual recording lẫn auto-snapshot khi detect face.
 

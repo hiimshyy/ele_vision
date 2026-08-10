@@ -40,6 +40,11 @@ plugins:
         tracker_max_lost: 15        # 3s at 5fps
         tracker_max_tracks: 10
         tracker_reverify_interval: 15  # re-verify every 3s at 5fps
+        # Auto-snapshot (save face crops on detection)
+        snapshot_enabled: false
+        snapshot_dir: "data/snapshots"
+        snapshot_max_per_person_per_day: 10
+        snapshot_save_full_frame: true
 
     - name: "dummy"
       enabled: false
