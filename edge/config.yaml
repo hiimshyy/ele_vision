@@ -13,12 +13,16 @@ camera:
 
 # --- MQTT Communication ---
 mqtt:
-  broker_host: "localhost"
-  broker_port: 1883
-  username: ""
-  password: ""
+  broker_host: "localhost"          # Override: SC_MQTT_BROKER_HOST
+  broker_port: 1883                 # Override: SC_MQTT_BROKER_PORT
+  username: ""                      # Override: SC_MQTT_USERNAME
+  password: ""                      # Override: SC_MQTT_PASSWORD
   device_id: "cabin-001"
+  client_id: ""                     # Override: SC_MQTT_CLIENT_ID
   keepalive: 60
+  # Topics (đội dev quy định)
+  topic_publish: "embody/w"         # Edge → Cloud (write)
+  topic_subscribe: "embody/r"       # Cloud → Edge (read)
 
 # --- Plugins ---
 plugins:

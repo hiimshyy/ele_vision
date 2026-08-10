@@ -23,6 +23,7 @@ Thumbs.db
 # Environment
 .env
 .env.local
+.env.production
 
 # Models (large binary files)
 edge/plugins/face_recognition/models/*.bin

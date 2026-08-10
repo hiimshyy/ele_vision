@@ -140,18 +140,24 @@ class CloudSync:
                  broker_host: str = "localhost",
                  broker_port: int = 1883,
                  device_id: str = "cabin-001",
+                 client_id: str = "",
                  username: str = "",
                  password: str = "",
                  keepalive: int = 60,
                  heartbeat_interval: int = 30,
+                 topic_publish: str = "",
+                 topic_subscribe: str = "",
                  buffer_path: str = "data/db/mqtt_buffer.db"):
         self._broker_host = broker_host
         self._broker_port = broker_port
         self._device_id = device_id
+        self._client_id = client_id or f"smart-cabin-{device_id}"
         self._username = username
         self._password = password
         self._keepalive = keepalive
         self._heartbeat_interval = heartbeat_interval
+        self._topic_publish = topic_publish    # Single publish topic (e.g., "embody/w")
+        self._topic_subscribe = topic_subscribe  # Single subscribe topic (e.g., "embody/r")
 
         # MQTT client (paho-mqtt v2)
         self._client: mqtt.Client | None = None
@@ -200,7 +206,7 @@ class CloudSync:
             # Create MQTT client (paho-mqtt v2 API)
             self._client = mqtt.Client(
                 callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-                client_id=f"smart-cabin-{self._device_id}",
+                client_id=self._client_id,
                 protocol=mqtt.MQTTv5,
             )
 
@@ -279,6 +285,9 @@ class CloudSync:
         """
         Publish an event to MQTT.
 
+        If topic_publish is configured, all events go to that single topic
+        (with event_type in payload). Otherwise uses per-event-type topics.
+
         If disconnected, buffers the message for later delivery.
 
         Args:
@@ -287,9 +296,15 @@ class CloudSync:
         Returns:
             True if published or buffered successfully
         """
-        topic = get_mqtt_topic(event)
-        if topic is None:
-            return False
+        # Determine topic
+        if self._topic_publish:
+            # Single topic mode (e.g., "embody/w") — all events go here
+            topic = self._topic_publish
+        else:
+            # Per-event-type topic mode (e.g., "cabin/{device_id}/face/recognized")
+            topic = get_mqtt_topic(event)
+            if topic is None:
+                return False
 
         # Serialize event to JSON
         payload = event.model_dump_json()
@@ -312,14 +327,24 @@ class CloudSync:
         """
         Publish a raw message (dict → JSON) to a topic.
 
+        If topic_publish is configured and topic is not explicitly overridden,
+        uses the configured publish topic.
+
         Args:
-            topic: MQTT topic (with device_id already formatted)
+            topic: MQTT topic (pass "" to use configured topic_publish)
             payload: Dict to serialize as JSON
             qos: MQTT QoS level
 
         Returns:
             True if published or buffered
         """
+        # Use configured publish topic if available and no explicit topic given
+        if self._topic_publish and not topic:
+            topic = self._topic_publish
+        elif self._topic_publish:
+            # Still use the configured topic for all outgoing messages
+            topic = self._topic_publish
+
         payload_str = json.dumps(payload)
 
         if self._connected and self._client:
@@ -362,9 +387,15 @@ class CloudSync:
             )
 
             # Subscribe to command topics
-            cmd_topic = f"cabin/{self._device_id}/command/+"
-            client.subscribe(cmd_topic, qos=1)
-            logger.info("event=mqtt_subscribed | topic={t}", t=cmd_topic)
+            if self._topic_subscribe:
+                # Use configured subscribe topic (e.g., "embody/r")
+                client.subscribe(self._topic_subscribe, qos=1)
+                logger.info("event=mqtt_subscribed | topic={t}", t=self._topic_subscribe)
+            else:
+                # Fallback: per-device command topic
+                cmd_topic = f"cabin/{self._device_id}/command/+"
+                client.subscribe(cmd_topic, qos=1)
+                logger.info("event=mqtt_subscribed | topic={t}", t=cmd_topic)
 
             # Publish start event
             self._publish_system_event("start", {"version": "1.0.0"})
@@ -388,33 +419,45 @@ class CloudSync:
     def _on_message(self, client, userdata, msg):
         """Called when a message is received (commands from cloud)."""
         try:
-            # Parse topic: cabin/{device_id}/command/{command_name}
+            payload = json.loads(msg.payload.decode()) if msg.payload else {}
+
+            # Determine command name from topic or payload
             parts = msg.topic.split("/")
+
             if len(parts) >= 4 and parts[2] == "command":
+                # Legacy format: cabin/{device_id}/command/{command_name}
                 command_name = parts[3]
-                payload = json.loads(msg.payload.decode()) if msg.payload else {}
+            elif "command" in payload:
+                # Single topic format: {"command": "restart_plugin", ...}
+                command_name = payload.get("command", "")
+            elif "action" in payload:
+                # Alternative: {"action": "sync_faces", ...}
+                command_name = payload.get("action", "")
+            else:
+                # Use topic as command identifier
+                command_name = msg.topic.split("/")[-1] if parts else "unknown"
 
-                logger.info(
-                    "event=command_received | command={cmd} | payload_size={s}",
-                    cmd=command_name, s=len(msg.payload),
-                )
+            logger.info(
+                "event=command_received | topic={t} | command={cmd} | payload_size={s}",
+                t=msg.topic, cmd=command_name, s=len(msg.payload),
+            )
 
-                # Dispatch to handler
-                handler = self._command_handlers.get(command_name)
-                if handler:
-                    try:
-                        handler(payload)
-                        self._stats.commands_received += 1
-                    except Exception as e:
-                        logger.error(
-                            "event=command_handler_error | command={cmd} | error={err}",
-                            cmd=command_name, err=str(e),
-                        )
-                else:
-                    logger.warning(
-                        "event=command_no_handler | command={cmd}",
-                        cmd=command_name,
+            # Dispatch to handler
+            handler = self._command_handlers.get(command_name)
+            if handler:
+                try:
+                    handler(payload)
+                    self._stats.commands_received += 1
+                except Exception as e:
+                    logger.error(
+                        "event=command_handler_error | command={cmd} | error={err}",
+                        cmd=command_name, err=str(e),
                     )
+            else:
+                logger.warning(
+                    "event=command_no_handler | command={cmd} | topic={t}",
+                    cmd=command_name, t=msg.topic,
+                )
         except Exception as e:
             logger.error("event=mqtt_message_error | error={err}", err=str(e))
 
