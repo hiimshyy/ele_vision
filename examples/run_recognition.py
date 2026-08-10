@@ -54,7 +54,9 @@ logger = get_logger("system")
 
 # Default paths
 MODEL_DIR = Path("edge/plugins/face_recognition/models")
-DEFAULT_DB = Path("faces.db")
+DATA_DIR = Path("data/faces")        # Enrolled face images
+DB_DIR = Path("data/db")             # Database files
+DEFAULT_DB = DB_DIR / "faces.db"
 
 
 def load_models():
@@ -148,10 +150,13 @@ def cmd_enroll(args):
     print(f"  Database: {total} embeddings, {persons} persons")
     print(f"  DB path:  {args.db}")
 
-    # Save aligned face preview
-    preview_path = Path(args.db).parent / f"enrolled_{args.id}.jpg"
-    cv2.imwrite(str(preview_path), aligned)
-    print(f"  Preview:  {preview_path}")
+    # Save aligned face to enrolled faces directory
+    enrolled_dir = DATA_DIR / args.id
+    enrolled_dir.mkdir(parents=True, exist_ok=True)
+    face_filename = f"{int(time.time())}_{Path(args.image).stem}.jpg"
+    face_path = enrolled_dir / face_filename
+    cv2.imwrite(str(face_path), aligned)
+    print(f"  Face saved: {face_path}")
 
 
 # --- LIST Command ---
@@ -315,12 +320,25 @@ def cmd_run(args):
         db=db.count_persons(), t=args.threshold,
     )
     print(f"\n  Camera opened: {w}x{h}")
-    print(f"  Processing at {args.fps} fps (Ctrl+C to stop)\n")
+    print(f"  Processing at {args.fps} fps")
+    print(f"  Controls: [q] quit | [s] screenshot | [ESC] quit\n")
 
-    frame_interval = 1.0 / args.fps
+    frame_interval = 1.0 / args.fps  # Processing interval (detect+embed)
     frame_id = 0
     last_process_time = 0
+    display_scale = args.scale
+    show_display = not args.no_display
     stats = {"frames": 0, "detections": 0, "embeddings": 0, "recognized": 0, "unknown": 0}
+    fps_timer = time.time()
+    fps_frame_count = 0
+    display_fps = 0.0
+
+    # Colors (BGR)
+    COLOR_RECOGNIZED = (0, 200, 0)     # Green
+    COLOR_UNKNOWN = (0, 0, 220)        # Red
+    COLOR_NEW = (200, 200, 0)          # Cyan (track not yet embedded)
+    COLOR_STATS_BG = (40, 40, 40)      # Dark gray
+    COLOR_WHITE = (255, 255, 255)
 
     try:
         while True:
@@ -333,110 +351,186 @@ def cmd_run(args):
                 cap = cv2.VideoCapture(url if not isinstance(url, int) else url)
                 continue
 
-            # FPS throttle
+            # FPS throttle for processing (display runs at full camera speed)
             now = time.time()
-            if now - last_process_time < frame_interval:
-                continue
-            last_process_time = now
-            frame_id += 1
-            stats["frames"] += 1
+            should_process = (now - last_process_time) >= frame_interval
 
-            # Detect
-            faces = detector.detect(frame, conf_threshold=0.5)
+            # Count display FPS
+            fps_frame_count += 1
+            elapsed = now - fps_timer
+            if elapsed >= 1.0:
+                display_fps = fps_frame_count / elapsed
+                fps_frame_count = 0
+                fps_timer = now
 
-            # Filter small faces
-            detections = []
-            for face in faces:
-                if face.width < args.min_size or face.height < args.min_size:
-                    continue
-                detections.append({
-                    "bbox": (face.x1, face.y1, face.x2, face.y2),
-                    "landmarks": face.landmarks,
-                    "confidence": face.score,
-                })
-                stats["detections"] += 1
+            if should_process:
+                last_process_time = now
+                frame_id += 1
+                stats["frames"] += 1
 
-            # Update tracker
-            tracks = tracker.update(detections, frame_id)
+                # Detect
+                faces = detector.detect(frame, conf_threshold=0.5)
 
-            # Process tracks needing embedding
-            for track in tracker.get_tracks_needing_embedding(frame_id):
-                aligned = align_face(frame, track.landmarks)
-                if aligned is None:
-                    continue
+                # Filter small faces
+                detections = []
+                for face in faces:
+                    if face.width < args.min_size or face.height < args.min_size:
+                        continue
+                    detections.append({
+                        "bbox": (face.x1, face.y1, face.x2, face.y2),
+                        "landmarks": face.landmarks,
+                        "confidence": face.score,
+                    })
+                    stats["detections"] += 1
 
-                embedding = embedder.extract(aligned)
-                if embedding is None:
-                    continue
+                # Update tracker
+                tracks = tracker.update(detections, frame_id)
 
-                stats["embeddings"] += 1
-                match = db.find_match(embedding, threshold=args.threshold)
+                # Process tracks needing embedding
+                for track in tracker.get_tracks_needing_embedding(frame_id):
+                    aligned = align_face(frame, track.landmarks)
+                    if aligned is None:
+                        continue
 
-                if match:
-                    track.set_embedding(embedding, identity=match.person_id,
-                                        identity_name=match.name,
-                                        confidence=match.similarity, frame_id=frame_id)
-                else:
-                    track.set_embedding(embedding, identity=None,
-                                        confidence=0.0, frame_id=frame_id)
+                    embedding = embedder.extract(aligned)
+                    if embedding is None:
+                        continue
 
-            # Print events for newly-identified tracks
-            for track in tracks:
-                if track.event_published:
-                    continue
-                if track.state != TrackState.ACTIVE:
-                    continue
-                if track.embedding is None:
-                    continue
+                    stats["embeddings"] += 1
+                    match = db.find_match(embedding, threshold=args.threshold)
 
-                if track.identity:
-                    stats["recognized"] += 1
+                    if match:
+                        track.set_embedding(embedding, identity=match.person_id,
+                                            identity_name=match.name,
+                                            confidence=match.similarity, frame_id=frame_id)
+                    else:
+                        track.set_embedding(embedding, identity=None,
+                                            confidence=0.0, frame_id=frame_id)
+
+                # Log events for newly-identified tracks
+                for track in tracks:
+                    if track.event_published:
+                        continue
+                    if track.state != TrackState.ACTIVE:
+                        continue
+                    if track.embedding is None:
+                        continue
+
+                    if track.identity:
+                        stats["recognized"] += 1
+                        logger.info(
+                            "event=face_recognized | track_id={tid} | person={pid} | "
+                            "name={name} | confidence={conf:.3f} | frame={fid}",
+                            tid=track.track_id, pid=track.identity,
+                            name=track.identity_name, conf=track.identity_confidence,
+                            fid=frame_id,
+                        )
+                    else:
+                        stats["unknown"] += 1
+                        logger.info(
+                            "event=face_unknown | track_id={tid} | det_confidence={conf:.3f} | frame={fid}",
+                            tid=track.track_id, conf=track.confidence, fid=frame_id,
+                        )
+
+                    track.event_published = True
+
+                # Periodic stats log (every 5 seconds)
+                if frame_id % (int(args.fps) * 5) == 0:
+                    active = len([t for t in tracks if t.state == TrackState.ACTIVE])
                     logger.info(
-                        "event=face_recognized | track_id={tid} | person={pid} | "
-                        "name={name} | confidence={conf:.3f} | frame={fid}",
-                        tid=track.track_id, pid=track.identity,
-                        name=track.identity_name, conf=track.identity_confidence,
-                        fid=frame_id,
+                        "event=recognition_stats | frames={fp} | detections={fd} | "
+                        "embeddings={ee} | recognized={rec} | unknown={unk} | "
+                        "active_tracks={at} | det_ms={dms:.1f} | emb_ms={ems:.1f}",
+                        fp=stats["frames"], fd=stats["detections"], ee=stats["embeddings"],
+                        rec=stats["recognized"], unk=stats["unknown"], at=active,
+                        dms=detector.inference_time_ms, ems=embedder.inference_time_ms,
                     )
-                    print(f"  [{_timestamp()}] RECOGNIZED: {track.identity_name} "
-                          f"(id={track.identity}, sim={track.identity_confidence:.3f}, "
-                          f"track={track.track_id})")
-                else:
-                    stats["unknown"] += 1
-                    logger.info(
-                        "event=face_unknown | track_id={tid} | det_confidence={conf:.3f} | frame={fid}",
-                        tid=track.track_id, conf=track.confidence, fid=frame_id,
-                    )
-                    print(f"  [{_timestamp()}] UNKNOWN FACE "
-                          f"(det_score={track.confidence:.3f}, track={track.track_id})")
 
-                track.event_published = True
+            # --- Draw UI overlay ---
+            if show_display:
+                display = frame.copy()
 
-            # Periodic stats (every 5 seconds)
-            if frame_id % (int(args.fps) * 5) == 0:
-                active = len([t for t in tracks if t.state == TrackState.ACTIVE])
-                logger.info(
-                    "event=recognition_stats | frames={fp} | detections={fd} | "
-                    "embeddings={ee} | recognized={rec} | unknown={unk} | "
-                    "active_tracks={at} | det_ms={dms:.1f} | emb_ms={ems:.1f}",
-                    fp=stats["frames"], fd=stats["detections"], ee=stats["embeddings"],
-                    rec=stats["recognized"], unk=stats["unknown"], at=active,
-                    dms=detector.inference_time_ms, ems=embedder.inference_time_ms,
+                # Draw tracked faces (only ACTIVE tracks with valid state)
+                for track in tracker.active_tracks:
+                    x1, y1, x2, y2 = [int(v) for v in track.bbox]
+
+                    # Choose color based on state
+                    if track.identity:
+                        color = COLOR_RECOGNIZED
+                        label = f"{track.identity_name} ({track.identity_confidence:.2f})"
+                    elif track.embedding is not None:
+                        color = COLOR_UNKNOWN
+                        label = f"Unknown ({track.confidence:.2f})"
+                    else:
+                        color = COLOR_NEW
+                        label = f"Track #{track.track_id}"
+
+                    # Draw bounding box
+                    cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
+
+                    # Draw label background
+                    (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+                    cv2.rectangle(display, (x1, y1 - text_h - 8), (x1 + text_w + 4, y1), color, -1)
+                    cv2.putText(display, label, (x1 + 2, y1 - 4),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_WHITE, 1, cv2.LINE_AA)
+
+                    # Draw landmarks (small circles)
+                    if track.landmarks is not None and len(track.landmarks) == 10:
+                        for j in range(5):
+                            lx = int(track.landmarks[j * 2])
+                            ly = int(track.landmarks[j * 2 + 1])
+                            if lx > 0 and ly > 0:
+                                cv2.circle(display, (lx, ly), 2, (0, 255, 255), -1)
+
+                # Draw stats bar at top
+                bar_h = 32
+                cv2.rectangle(display, (0, 0), (display.shape[1], bar_h), COLOR_STATS_BG, -1)
+                active_count = len(tracker.active_tracks)
+                stats_text = (
+                    f"Display: {display_fps:.0f}fps | "
+                    f"Process: {args.fps:.0f}fps | "
+                    f"Tracks: {active_count} | "
+                    f"Det: {detector.inference_time_ms:.0f}ms | "
+                    f"Emb: {embedder.inference_time_ms:.0f}ms | "
+                    f"Rec: {stats['recognized']} | "
+                    f"Unk: {stats['unknown']}"
                 )
-                print(f"  [{_timestamp()}] stats: frames={stats['frames']} "
-                      f"det={stats['detections']} emb={stats['embeddings']} "
-                      f"rec={stats['recognized']} unk={stats['unknown']} "
-                      f"active_tracks={active}")
+                cv2.putText(display, stats_text, (8, 22),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_WHITE, 1, cv2.LINE_AA)
+
+                # Scale for display if needed
+                if display_scale != 1.0:
+                    new_w = int(display.shape[1] * display_scale)
+                    new_h = int(display.shape[0] * display_scale)
+                    display = cv2.resize(display, (new_w, new_h))
+
+                # Show
+                cv2.imshow("Smart Cabin - Face Recognition", display)
+
+                # Handle keys
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q") or key == 27:  # q or ESC
+                    break
+                elif key == ord("s"):  # screenshot
+                    screenshot_path = f"screenshot_{int(time.time())}.jpg"
+                    cv2.imwrite(screenshot_path, display)
+                    print(f"  Screenshot saved: {screenshot_path}")
 
     except KeyboardInterrupt:
-        print(f"\n\n  Stopped. Stats:")
+        pass
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+        db.close()
+
+        print(f"\n  Stopped. Stats:")
         print(f"    Frames processed: {stats['frames']}")
         print(f"    Face detections:  {stats['detections']}")
         print(f"    Embeddings extracted: {stats['embeddings']}")
         print(f"    Recognized: {stats['recognized']}")
         print(f"    Unknown:    {stats['unknown']}")
-        if stats['frames'] > 0:
-            ratio = stats['embeddings'] / max(stats['detections'], 1) * 100
+        if stats["detections"] > 0:
+            ratio = stats["embeddings"] / stats["detections"] * 100
             print(f"    Embedding ratio: {ratio:.1f}% (lower = tracker saving more CPU)")
         logger.info(
             "event=recognition_stopped | frames={fp} | detections={fd} | "
@@ -444,9 +538,6 @@ def cmd_run(args):
             fp=stats["frames"], fd=stats["detections"], ee=stats["embeddings"],
             rec=stats["recognized"], unk=stats["unknown"],
         )
-    finally:
-        cap.release()
-        db.close()
 
 
 # --- Helpers ---
@@ -510,11 +601,17 @@ Examples:
     p_run.add_argument("--url", required=True, help="Camera URL or device index (0)")
     p_run.add_argument("--fps", type=float, default=5.0, help="Processing FPS (default: 5)")
     p_run.add_argument("--min-size", type=int, default=80, help="Min face size in px")
+    p_run.add_argument("--scale", type=float, default=1.0, help="Display scale (e.g. 0.5 for half)")
+    p_run.add_argument("--no-display", action="store_true", help="Run headless (no window)")
 
     args = parser.parse_args()
 
     # Setup logging
     setup_logging("INFO")
+
+    # Ensure data directories exist
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DB_DIR.mkdir(parents=True, exist_ok=True)
 
     # Dispatch
     if args.command == "enroll":

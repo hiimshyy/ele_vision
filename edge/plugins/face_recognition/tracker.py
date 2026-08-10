@@ -181,11 +181,13 @@ class FaceTracker:
                  iou_threshold: float = 0.4,
                  max_lost: int = 15,
                  max_tracks: int = 10,
-                 reverify_interval: int = 15):
+                 reverify_interval: int = 15,
+                 centroid_dist_threshold: float = 150.0):
         self._iou_threshold = iou_threshold
         self._max_lost = max_lost
         self._max_tracks = max_tracks
         self._reverify_interval = reverify_interval
+        self._centroid_dist_threshold = centroid_dist_threshold
         self._tracks: list[Track] = []
         self._next_id: int = 1
 
@@ -263,7 +265,42 @@ class FaceTracker:
                 matched_dets.add(det_idx)
                 matched_trks.add(trk_idx)
 
-            # Step 3: Create new tracks for unmatched detections
+            # Step 3: Fallback centroid matching for unmatched detections
+            # Helps when person moves fast (IoU=0 but centroid still close)
+            unmatched_det_indices = [i for i in range(len(detections)) if i not in matched_dets]
+            unmatched_trk_indices = [j for j in range(len(active_tracks)) if j not in matched_trks]
+
+            if unmatched_det_indices and unmatched_trk_indices:
+                centroid_pairs = []
+                for i in unmatched_det_indices:
+                    det_bbox = detections[i]["bbox"]
+                    det_cx = (det_bbox[0] + det_bbox[2]) / 2
+                    det_cy = (det_bbox[1] + det_bbox[3]) / 2
+                    for j in unmatched_trk_indices:
+                        trk_bbox = active_tracks[j].bbox
+                        trk_cx = (trk_bbox[0] + trk_bbox[2]) / 2
+                        trk_cy = (trk_bbox[1] + trk_bbox[3]) / 2
+                        dist = ((det_cx - trk_cx) ** 2 + (det_cy - trk_cy) ** 2) ** 0.5
+                        if dist < self._centroid_dist_threshold:
+                            centroid_pairs.append((dist, i, j))
+
+                centroid_pairs.sort()  # Closest first
+                for dist, det_idx, trk_idx in centroid_pairs:
+                    if det_idx in matched_dets or trk_idx in matched_trks:
+                        continue
+                    track = active_tracks[trk_idx]
+                    det = detections[det_idx]
+                    track.bbox = det["bbox"]
+                    track.landmarks = det["landmarks"]
+                    track.confidence = det["confidence"]
+                    track.state = TrackState.ACTIVE
+                    track.lost_count = 0
+                    track.frame_count += 1
+                    track.last_seen_frame = frame_id
+                    matched_dets.add(det_idx)
+                    matched_trks.add(trk_idx)
+
+            # Step 4: Create new tracks for still-unmatched detections
             for i, det in enumerate(detections):
                 if i not in matched_dets:
                     self._create_track(det, frame_id)

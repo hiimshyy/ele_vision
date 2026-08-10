@@ -34,7 +34,7 @@ plugins:
         min_face_size: 80
         min_face_quality: 50.0
         cooldown_seconds: 30
-        database_path: "faces.db"
+        database_path: "data/db/faces.db"
         # Tracker settings
         tracker_iou_threshold: 0.4
         tracker_max_lost: 15        # 3s at 5fps
