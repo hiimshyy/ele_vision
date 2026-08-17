@@ -40,6 +40,11 @@ import sys
 import time
 from pathlib import Path
 
+# Fix Windows console encoding for Vietnamese characters
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import cv2
 import numpy as np
 
@@ -156,7 +161,8 @@ class FaceEnroller:
         return True
 
     def enroll_image(self, image_path: str, person_id: str, name: str,
-                     skip_duplicate_check: bool = False) -> bool:
+                     skip_duplicate_check: bool = False,
+                     default_floor: int | None = None) -> bool:
         """
         Enroll a face from an image file.
 
@@ -169,10 +175,11 @@ class FaceEnroller:
             return False
 
         return self._enroll_frame(frame, person_id, name, source=image_path,
-                                  skip_duplicate_check=skip_duplicate_check)
+                                  skip_duplicate_check=skip_duplicate_check,
+                                  default_floor=default_floor)
 
     def enroll_from_camera(self, person_id: str, name: str, url: str | int = 0,
-                           num_captures: int = 3) -> bool:
+                           num_captures: int = 3, default_floor: int | None = None) -> bool:
         """
         Enroll face from camera with live preview.
 
@@ -232,7 +239,8 @@ class FaceEnroller:
                 print(f"    Capture #{capture_num}...", end=" ")
                 success = self._enroll_frame(frame, person_id, name,
                                              source=f"camera_capture_{capture_num}",
-                                             skip_duplicate_check=(enrolled > 0))
+                                             skip_duplicate_check=(enrolled > 0),
+                                             default_floor=default_floor)
                 if success:
                     enrolled += 1
                 if enrolled >= num_captures:
@@ -245,7 +253,11 @@ class FaceEnroller:
         cv2.destroyAllWindows()
 
         if enrolled > 0:
-            print(f"\n  Enrolled {enrolled} image(s) for: {name} (id={person_id})")
+            # Set floor for all enrolled embeddings
+            if default_floor is not None:
+                self._database.update_person_floor(person_id, default_floor)
+            print(f"\n  Enrolled {enrolled} image(s) for: {name} (id={person_id})"
+                  f"{f', floor={default_floor}' if default_floor else ''}")
             logger.info(
                 "event=camera_enroll_done | person_id={pid} | name={n} | captures={c}",
                 pid=person_id, n=name, c=enrolled,
@@ -256,7 +268,8 @@ class FaceEnroller:
         return enrolled > 0
 
     def enroll_batch(self, folder: str, name_from_file: bool = False,
-                     default_id: str = "", default_name: str = "") -> int:
+                     default_id: str = "", default_name: str = "",
+                     default_floor: int | None = None) -> int:
         """
         Enroll all images from a folder.
 
@@ -299,7 +312,8 @@ class FaceEnroller:
 
             print(f"    {img_path.name} → id={person_id}, name={name}...", end=" ")
             success = self.enroll_image(str(img_path), person_id, name,
-                                        skip_duplicate_check=True)
+                                        skip_duplicate_check=True,
+                                        default_floor=default_floor)
             if success:
                 enrolled += 1
 
@@ -307,7 +321,8 @@ class FaceEnroller:
         return enrolled
 
     def _enroll_frame(self, frame: np.ndarray, person_id: str, name: str,
-                      source: str = "", skip_duplicate_check: bool = False) -> bool:
+                      source: str = "", skip_duplicate_check: bool = False,
+                      default_floor: int | None = None) -> bool:
         """Internal: validate, embed, and store a single frame."""
         # Detect
         faces = self._detector.detect(frame, conf_threshold=0.5)
@@ -340,7 +355,7 @@ class FaceEnroller:
                 # Still enroll but warn
 
         # Save to database
-        self._database.add_face(person_id, name, embedding)
+        self._database.add_face(person_id, name, embedding, default_floor=default_floor)
 
         # Save aligned face to data/faces/{person_id}/
         face_dir = DATA_FACES_DIR / person_id
@@ -380,19 +395,21 @@ class FaceEnroller:
 
         print(f"\n  Face Database: {self.db_path}")
         print(f"  Total: {len(records)} embeddings, {self._database.count_persons()} persons\n")
-        print(f"  {'ID':<15} {'Name':<20} {'Embeddings':<12} {'Created'}")
-        print(f"  {'-'*15} {'-'*20} {'-'*12} {'-'*20}")
+        print(f"  {'ID':<15} {'Name':<20} {'Floor':<7} {'Embeddings':<12} {'Created'}")
+        print(f"  {'-'*15} {'-'*20} {'-'*7} {'-'*12} {'-'*20}")
 
         # Group by person
         persons = {}
         for r in records:
             if r.person_id not in persons:
-                persons[r.person_id] = {"name": r.name, "count": 0, "created": r.created_at}
+                persons[r.person_id] = {"name": r.name, "count": 0,
+                                         "created": r.created_at, "floor": r.default_floor}
             persons[r.person_id]["count"] += 1
 
         for pid, info in sorted(persons.items()):
             created = time.strftime("%Y-%m-%d %H:%M", time.localtime(info["created"]))
-            print(f"  {pid:<15} {info['name']:<20} {info['count']:<12} {created}")
+            floor_str = str(info["floor"]) if info["floor"] is not None else "-"
+            print(f"  {pid:<15} {info['name']:<20} {floor_str:<7} {info['count']:<12} {created}")
 
     def remove_face(self, person_id: str) -> None:
         """Remove a person from database."""
@@ -447,11 +464,13 @@ Examples:
     p_image.add_argument("--path", nargs="+", required=True, help="Image path(s)")
     p_image.add_argument("--id", required=True, help="Person ID")
     p_image.add_argument("--name", required=True, help="Person name")
+    p_image.add_argument("--floor", type=int, default=None, help="Default floor (elevator)")
 
     # Camera mode
     p_camera = subparsers.add_parser("camera", help="Enroll from camera (live preview)")
     p_camera.add_argument("--id", required=True, help="Person ID")
     p_camera.add_argument("--name", required=True, help="Person name")
+    p_camera.add_argument("--floor", type=int, default=None, help="Default floor (elevator)")
     p_camera.add_argument("--url", default="0", help="Camera URL/index (default: 0)")
     p_camera.add_argument("--captures", type=int, default=3,
                           help="Number of captures recommended (default: 3)")
@@ -463,6 +482,7 @@ Examples:
                          help="Parse person_id_name from filename")
     p_batch.add_argument("--id", default="", help="Default person ID (if not from file)")
     p_batch.add_argument("--name", default="", help="Default name (if not from file)")
+    p_batch.add_argument("--floor", type=int, default=None, help="Default floor (elevator)")
 
     # List
     subparsers.add_parser("list", help="List enrolled faces")
@@ -515,17 +535,23 @@ Examples:
             success_count = 0
             for img_path in args.path:
                 print(f"\n    [{img_path}]...", end=" ")
-                if enroller.enroll_image(img_path, args.id, args.name):
+                if enroller.enroll_image(img_path, args.id, args.name,
+                                         default_floor=args.floor):
                     success_count += 1
-            print(f"\n  Result: {success_count}/{len(args.path)} enrolled for {args.name}")
+            if args.floor is not None and success_count > 0:
+                enroller._database.update_person_floor(args.id, args.floor)
+            print(f"\n  Result: {success_count}/{len(args.path)} enrolled for {args.name}"
+                  f"{f' (floor={args.floor})' if args.floor else ''}")
 
         elif args.command == "camera":
             enroller.enroll_from_camera(args.id, args.name, url=args.url,
-                                        num_captures=args.captures)
+                                        num_captures=args.captures,
+                                        default_floor=args.floor)
 
         elif args.command == "batch":
             enroller.enroll_batch(args.folder, name_from_file=args.name_from_file,
-                                  default_id=args.id, default_name=args.name)
+                                  default_id=args.id, default_name=args.name,
+                                  default_floor=args.floor)
 
         enroller.close()
 

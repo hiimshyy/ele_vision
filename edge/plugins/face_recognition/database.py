@@ -32,6 +32,7 @@ class FaceRecord:
     embedding: np.ndarray  # (512,) float32
     created_at: float      # unix timestamp
     updated_at: float      # unix timestamp
+    default_floor: int | None = None  # Default floor for elevator control
 
     @property
     def embedding_dim(self) -> int:
@@ -99,6 +100,7 @@ class FaceDatabase:
                 name TEXT NOT NULL DEFAULT '',
                 embedding BLOB NOT NULL,
                 embedding_dim INTEGER NOT NULL DEFAULT 512,
+                default_floor INTEGER DEFAULT NULL,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             )
@@ -108,7 +110,11 @@ class FaceDatabase:
         """)
         self._conn.commit()
 
-    def add_face(self, person_id: str, name: str, embedding: np.ndarray) -> int:
+        # Migration: add default_floor column if missing (existing databases)
+        self._migrate_add_floor_column()
+
+    def add_face(self, person_id: str, name: str, embedding: np.ndarray,
+                 default_floor: int | None = None) -> int:
         """
         Add a face embedding to the database.
 
@@ -116,6 +122,7 @@ class FaceDatabase:
             person_id: Unique person identifier
             name: Display name
             embedding: Normalized embedding vector (512,)
+            default_floor: Default floor for elevator control (optional)
 
         Returns:
             Row ID of inserted record
@@ -127,15 +134,15 @@ class FaceDatabase:
         embedding_blob = embedding.astype(np.float32).tobytes()
 
         cursor = self._conn.execute(
-            "INSERT INTO faces (person_id, name, embedding, embedding_dim, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (person_id, name, embedding_blob, embedding.shape[0], now, now),
+            "INSERT INTO faces (person_id, name, embedding, embedding_dim, default_floor, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (person_id, name, embedding_blob, embedding.shape[0], default_floor, now, now),
         )
         self._conn.commit()
 
         logger.info(
-            "event=face_added | person_id={pid} | name={name} | dim={dim}",
-            pid=person_id, name=name, dim=embedding.shape[0],
+            "event=face_added | person_id={pid} | name={name} | dim={dim} | floor={f}",
+            pid=person_id, name=name, dim=embedding.shape[0], f=default_floor,
         )
         return cursor.lastrowid
 
@@ -170,7 +177,7 @@ class FaceDatabase:
             return []
 
         cursor = self._conn.execute(
-            "SELECT person_id, name, embedding, created_at, updated_at FROM faces"
+            "SELECT person_id, name, embedding, created_at, updated_at, default_floor FROM faces"
         )
         records = []
         for row in cursor.fetchall():
@@ -181,6 +188,7 @@ class FaceDatabase:
                 embedding=embedding,
                 created_at=row[3],
                 updated_at=row[4],
+                default_floor=row[5],
             ))
         return records
 
@@ -190,7 +198,7 @@ class FaceDatabase:
             return []
 
         cursor = self._conn.execute(
-            "SELECT person_id, name, embedding, created_at, updated_at FROM faces "
+            "SELECT person_id, name, embedding, created_at, updated_at, default_floor FROM faces "
             "WHERE person_id = ?", (person_id,)
         )
         records = []
@@ -202,6 +210,7 @@ class FaceDatabase:
                 embedding=embedding,
                 created_at=row[3],
                 updated_at=row[4],
+                default_floor=row[5],
             ))
         return records
 
@@ -268,6 +277,62 @@ class FaceDatabase:
         if best_match is not None and best_match.similarity >= threshold:
             return best_match
         return None
+
+    def _migrate_add_floor_column(self) -> None:
+        """Migration: add default_floor column if not exists (for existing DBs)."""
+        try:
+            cursor = self._conn.execute("PRAGMA table_info(faces)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "default_floor" not in columns:
+                self._conn.execute("ALTER TABLE faces ADD COLUMN default_floor INTEGER DEFAULT NULL")
+                self._conn.commit()
+                logger.info("event=db_migration | added_column=default_floor")
+        except Exception as e:
+            logger.warning("event=db_migration_skipped | error={err}", err=str(e))
+
+    def update_person_floor(self, person_id: str, floor: int | None) -> int:
+        """
+        Update default floor for a person (all their embeddings).
+
+        Args:
+            person_id: Person identifier
+            floor: Floor number (None to clear)
+
+        Returns:
+            Number of rows updated
+        """
+        if self._conn is None:
+            raise RuntimeError("Database not initialized")
+
+        cursor = self._conn.execute(
+            "UPDATE faces SET default_floor = ?, updated_at = ? WHERE person_id = ?",
+            (floor, time.time(), person_id),
+        )
+        self._conn.commit()
+        logger.info(
+            "event=floor_updated | person_id={pid} | floor={f} | rows={n}",
+            pid=person_id, f=floor, n=cursor.rowcount,
+        )
+        return cursor.rowcount
+
+    def get_person_floor(self, person_id: str) -> int | None:
+        """
+        Get default floor for a person.
+
+        Returns:
+            Floor number or None if not set
+        """
+        if self._conn is None:
+            return None
+
+        cursor = self._conn.execute(
+            "SELECT default_floor FROM faces WHERE person_id = ? LIMIT 1",
+            (person_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return row[0]
 
     def close(self) -> None:
         """Close database connection."""
