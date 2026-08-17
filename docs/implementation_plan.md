@@ -402,7 +402,7 @@ ele_vision/
 
 ---
 
-### Task 11: Edge REST API ⬜ (Not started)
+### Task 11: Edge REST API ✅
 
 **Objective**: FastAPI REST API cho admin operations + đội cloud.
 

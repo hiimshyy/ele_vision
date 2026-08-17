@@ -24,6 +24,7 @@ Nền tảng AI cho cabin thang máy, chạy trên Orange Pi 4 Pro với camera 
 - **Data Collection** — Video recorder, periodic snapshots, auto face crop on detection (PNG lossless)
 - **OpenCV Display** — Realtime UI with bbox, name, confidence, face size, landmarks, stats bar
 - **MQTT Cloud Sync** — paho-mqtt, event bridge, heartbeat, offline buffer, command handling
+- **Edge REST API** — FastAPI, face enrollment upload, system status, auto-generated OpenAPI docs
 - **Structured Logging** — Loguru, key-value format, module-based files (camera/scheduler/plugin/system)
 - **Per-plugin Metrics** — actual_fps, avg_process_ms, missed_deadlines, errors, disabled status
 
@@ -257,7 +258,7 @@ Controls: `[q/ESC]` quit | `[s]` screenshot
 - [x] Task 8: Data Collection & Auto-Snapshot
 - [x] Task 9: Face Enrollment CLI
 - [x] Task 10: MQTT Client & Cloud Sync
-- [ ] Task 11: Edge REST API
+- [x] Task 11: Edge REST API
 - [ ] Task 12: API Documentation
 - [ ] Task 13: End-to-End Integration
 

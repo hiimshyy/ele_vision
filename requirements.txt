@@ -13,6 +13,12 @@ numpy==2.5.1
 # MQTT Communication (Task 10)
 paho-mqtt==2.1.0
 
+# Edge REST API (Task 11)
+fastapi==0.115.12
+uvicorn==0.34.3
+python-multipart==0.0.20
+httpx==0.28.1
+
 # Database
 # sqlite handled by stdlib
 
