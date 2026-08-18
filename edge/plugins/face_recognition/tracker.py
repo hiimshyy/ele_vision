@@ -1,27 +1,27 @@
 """
-Smart Cabin - Lightweight Face Tracker
+Smart Cabin - ByteTrack Face Tracker
 
-IoU-based tracker for face detection results. Maintains track identities
-across frames to avoid redundant embedding extraction.
+Production-grade multi-object tracker based on ByteTrack algorithm:
+- Kalman Filter: predict next position, smooth trajectory
+- 2-Stage Matching: high-confidence first, then low-confidence (recover occluded)
+- Hungarian Algorithm: optimal assignment (scipy linear_sum_assignment)
+- Track lifecycle: NEW → ACTIVE → LOST → REMOVED
 
-Design:
-    - Simple IoU matching (no Kalman filter — overkill for 5fps cabin camera)
-    - Track states: NEW → ACTIVE → LOST → REMOVED
-    - Embedding only extracted for NEW/unidentified tracks
-    - Re-verify existing tracks periodically
+Reference: ByteTrack (ECCV 2022) - Zhang et al.
+Adapted for face tracking in cabin camera (5fps, max 10 faces).
 
 Usage:
-    tracker = FaceTracker(iou_threshold=0.5, max_lost=15)
+    tracker = FaceTracker()
     tracks = tracker.update(detections, frame_id)
     for track in tracks:
         if track.needs_embedding:
-            embedding = embedder.extract(aligned_face)
-            track.set_embedding(embedding, identity, confidence)
+            ...
 """
 
 from dataclasses import dataclass, field
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from edge.core.logging_setup import get_logger
 
@@ -39,6 +39,104 @@ class TrackState:
     REMOVED = "removed"  # Exceeded max_lost, ready for cleanup
 
 
+# --- Kalman Filter ---
+
+
+class KalmanFilter:
+    """
+    Simple 2D Kalman filter for bounding box tracking.
+
+    State: [cx, cy, area, aspect_ratio, vx, vy, v_area, v_aspect]
+    Measurement: [cx, cy, area, aspect_ratio]
+    """
+
+    def __init__(self):
+        # State transition matrix (constant velocity model)
+        self._dt = 1.0  # Normalized time step
+        self._F = np.eye(8, dtype=np.float64)
+        self._F[:4, 4:] = self._dt * np.eye(4)
+
+        # Measurement matrix
+        self._H = np.eye(4, 8, dtype=np.float64)
+
+        # Process noise
+        self._Q = np.eye(8, dtype=np.float64)
+        self._Q[4:, 4:] *= 0.01  # Velocity components have less noise
+
+        # Measurement noise
+        self._R = np.eye(4, dtype=np.float64) * 1.0
+
+        # State and covariance
+        self._x = np.zeros(8, dtype=np.float64)
+        self._P = np.eye(8, dtype=np.float64) * 10.0
+
+    def initialize(self, bbox: tuple[float, float, float, float]) -> None:
+        """Initialize state from bounding box (x1, y1, x2, y2)."""
+        cx, cy, area, ar = self._bbox_to_measurement(bbox)
+        self._x[:4] = [cx, cy, area, ar]
+        self._x[4:] = 0  # Zero initial velocity
+        self._P = np.eye(8, dtype=np.float64) * 10.0
+        self._P[4:, 4:] *= 100.0  # High uncertainty for velocity
+
+    def predict(self) -> tuple[float, float, float, float]:
+        """Predict next state and return predicted bbox."""
+        self._x = self._F @ self._x
+        self._P = self._F @ self._P @ self._F.T + self._Q
+
+        # Ensure area and aspect ratio stay positive
+        self._x[2] = max(self._x[2], 1.0)
+        self._x[3] = max(self._x[3], 0.1)
+
+        return self._state_to_bbox()
+
+    def update(self, bbox: tuple[float, float, float, float]) -> None:
+        """Update state with measurement."""
+        z = np.array(self._bbox_to_measurement(bbox), dtype=np.float64)
+
+        # Innovation
+        y = z - self._H @ self._x
+        S = self._H @ self._P @ self._H.T + self._R
+
+        # Kalman gain
+        K = self._P @ self._H.T @ np.linalg.inv(S)
+
+        # Update
+        self._x = self._x + K @ y
+        self._P = (np.eye(8) - K @ self._H) @ self._P
+
+        # Ensure area and aspect ratio stay positive
+        self._x[2] = max(self._x[2], 1.0)
+        self._x[3] = max(self._x[3], 0.1)
+
+    def get_state_bbox(self) -> tuple[float, float, float, float]:
+        """Get current state as bbox (x1, y1, x2, y2)."""
+        return self._state_to_bbox()
+
+    def _bbox_to_measurement(self, bbox):
+        """Convert (x1, y1, x2, y2) to (cx, cy, area, aspect_ratio)."""
+        x1, y1, x2, y2 = bbox
+        w = x2 - x1
+        h = y2 - y1
+        cx = x1 + w / 2
+        cy = y1 + h / 2
+        area = w * h
+        ar = w / max(h, 1e-6)
+        return cx, cy, area, ar
+
+    def _state_to_bbox(self):
+        """Convert state (cx, cy, area, aspect_ratio) to (x1, y1, x2, y2)."""
+        cx, cy, area, ar = self._x[:4]
+        area = max(area, 1.0)
+        ar = max(ar, 0.1)
+        h = np.sqrt(area / ar)
+        w = ar * h
+        x1 = cx - w / 2
+        y1 = cy - h / 2
+        x2 = cx + w / 2
+        y2 = cy + h / 2
+        return (x1, y1, x2, y2)
+
+
 # --- Track ---
 
 
@@ -53,26 +151,31 @@ class Track:
     state: str = TrackState.NEW
 
     # Identity (set after embedding + matching)
-    identity: str | None = None        # person_id or None
-    identity_name: str = ""            # person display name
-    identity_confidence: float = 0.0   # matching similarity score
+    identity: str | None = None
+    identity_name: str = ""
+    identity_confidence: float = 0.0
     embedding: np.ndarray | None = None
 
     # Tracking counters
-    frame_count: int = 0         # frames since track created
-    lost_count: int = 0          # consecutive frames not matched
-    first_seen_frame: int = 0    # frame_id when track was created
-    last_seen_frame: int = 0     # frame_id when last matched
-    last_embed_frame: int = 0    # frame_id when embedding was last extracted
-    event_published: bool = False  # whether recognition event was published
+    frame_count: int = 0
+    lost_count: int = 0
+    first_seen_frame: int = 0
+    last_seen_frame: int = 0
+    last_embed_frame: int = 0
+    event_published: bool = False
+
+    # Kalman filter (initialized post-creation)
+    _kalman: KalmanFilter = field(default_factory=KalmanFilter, repr=False)
+
+    def __post_init__(self):
+        """Initialize Kalman filter with initial bbox."""
+        self._kalman.initialize(self.bbox)
 
     @property
     def needs_embedding(self) -> bool:
         """Whether this track needs embedding extraction."""
-        # New track always needs embedding
         if self.state == TrackState.NEW:
             return True
-        # Unidentified track needs retry
         if self.identity is None and self.embedding is None:
             return True
         return False
@@ -99,9 +202,25 @@ class Track:
 
     @property
     def bbox_xywh(self) -> list[int]:
-        """Bounding box as [x, y, w, h] integers (for event publishing)."""
+        """Bounding box as [x, y, w, h] integers."""
         x1, y1, x2, y2 = self.bbox
         return [int(x1), int(y1), int(x2 - x1), int(y2 - y1)]
+
+    def predict(self) -> tuple[float, float, float, float]:
+        """Kalman predict next position."""
+        return self._kalman.predict()
+
+    def update_bbox(self, bbox: tuple[float, float, float, float],
+                    landmarks: np.ndarray, confidence: float, frame_id: int) -> None:
+        """Update track with new detection (Kalman update + state)."""
+        self._kalman.update(bbox)
+        self.bbox = self._kalman.get_state_bbox()
+        self.landmarks = landmarks
+        self.confidence = confidence
+        self.state = TrackState.ACTIVE
+        self.lost_count = 0
+        self.frame_count += 1
+        self.last_seen_frame = frame_id
 
 
 # --- IoU Computation ---
@@ -109,16 +228,7 @@ class Track:
 
 def compute_iou(box_a: tuple[float, float, float, float],
                 box_b: tuple[float, float, float, float]) -> float:
-    """
-    Compute Intersection over Union between two bboxes.
-
-    Args:
-        box_a: (x1, y1, x2, y2)
-        box_b: (x1, y1, x2, y2)
-
-    Returns:
-        IoU value in [0.0, 1.0]
-    """
+    """Compute IoU between two bboxes (x1, y1, x2, y2)."""
     x1 = max(box_a[0], box_b[0])
     y1 = max(box_a[1], box_b[1])
     x2 = min(box_a[2], box_b[2])
@@ -139,16 +249,7 @@ def compute_iou(box_a: tuple[float, float, float, float],
 
 
 def compute_iou_matrix(detections: list[tuple], tracks: list[Track]) -> np.ndarray:
-    """
-    Compute IoU matrix between detections and existing tracks.
-
-    Args:
-        detections: List of (x1, y1, x2, y2) bboxes
-        tracks: List of Track objects
-
-    Returns:
-        (N_det, N_track) IoU matrix
-    """
+    """Compute IoU matrix between detection bboxes and track predicted bboxes."""
     n_det = len(detections)
     n_trk = len(tracks)
     iou_matrix = np.zeros((n_det, n_trk), dtype=np.float32)
@@ -160,40 +261,84 @@ def compute_iou_matrix(detections: list[tuple], tracks: list[Track]) -> np.ndarr
     return iou_matrix
 
 
-# --- Face Tracker ---
+# --- Hungarian Matching ---
+
+
+def linear_assignment(cost_matrix: np.ndarray,
+                      threshold: float) -> tuple[list[tuple], list[int], list[int]]:
+    """
+    Solve assignment problem using Hungarian algorithm.
+
+    Args:
+        cost_matrix: (N_det, N_trk) cost matrix (1 - IoU)
+        threshold: Maximum cost to accept a match
+
+    Returns:
+        matches: list of (det_idx, trk_idx) pairs
+        unmatched_dets: list of unmatched detection indices
+        unmatched_trks: list of unmatched track indices
+    """
+    if cost_matrix.size == 0:
+        return [], list(range(cost_matrix.shape[0])), list(range(cost_matrix.shape[1]))
+
+    row_indices, col_indices = linear_sum_assignment(cost_matrix)
+
+    matches = []
+    unmatched_dets = set(range(cost_matrix.shape[0]))
+    unmatched_trks = set(range(cost_matrix.shape[1]))
+
+    for row, col in zip(row_indices, col_indices):
+        if cost_matrix[row, col] <= threshold:
+            matches.append((row, col))
+            unmatched_dets.discard(row)
+            unmatched_trks.discard(col)
+
+    return matches, list(unmatched_dets), list(unmatched_trks)
+
+
+# --- ByteTrack Face Tracker ---
 
 
 class FaceTracker:
     """
-    Lightweight IoU-based face tracker.
+    ByteTrack-based face tracker.
 
-    Matches new detections to existing tracks using IoU overlap.
-    Designed for low-FPS cabin camera (5fps, max 5-6 people).
+    Features:
+    - Kalman filter for motion prediction
+    - 2-stage matching (high-conf → low-conf)
+    - Hungarian algorithm for optimal assignment
+    - Track lifecycle management (NEW → ACTIVE → LOST → REMOVED)
 
     Args:
-        iou_threshold: Minimum IoU to match detection to track (default 0.4)
-        max_lost: Frames before removing lost track (default 15 = 3s at 5fps)
+        high_threshold: Confidence threshold for high-conf detections (default 0.6)
+        low_threshold: Confidence threshold for low-conf detections (default 0.3)
+        iou_threshold: IoU threshold for matching (default 0.4)
+        max_lost: Frames before removing lost track (default 15)
         max_tracks: Maximum simultaneous tracks (default 10)
-        reverify_interval: Frames between re-verification (default 15 = 3s at 5fps)
+        reverify_interval: Frames between re-verification (default 15)
     """
 
     def __init__(self,
+                 high_threshold: float = 0.6,
+                 low_threshold: float = 0.3,
                  iou_threshold: float = 0.4,
                  max_lost: int = 15,
                  max_tracks: int = 10,
                  reverify_interval: int = 15,
+                 # Legacy params (ignored, kept for backward compat)
                  centroid_dist_threshold: float = 150.0):
+        self._high_threshold = high_threshold
+        self._low_threshold = low_threshold
         self._iou_threshold = iou_threshold
         self._max_lost = max_lost
         self._max_tracks = max_tracks
         self._reverify_interval = reverify_interval
-        self._centroid_dist_threshold = centroid_dist_threshold
         self._tracks: list[Track] = []
         self._next_id: int = 1
 
     @property
     def tracks(self) -> list[Track]:
-        """All active tracks (not REMOVED)."""
+        """All non-removed tracks."""
         return [t for t in self._tracks if t.state != TrackState.REMOVED]
 
     @property
@@ -208,108 +353,110 @@ class FaceTracker:
 
     def update(self, detections: list[dict], frame_id: int) -> list[Track]:
         """
-        Update tracker with new detections.
+        Update tracker with new detections (ByteTrack algorithm).
 
         Args:
-            detections: List of dicts with keys: bbox (x1,y1,x2,y2), landmarks (10,), confidence
+            detections: List of dicts with keys: bbox, landmarks, confidence
             frame_id: Current frame number
 
         Returns:
-            List of all active Track objects (matched + new)
+            List of all active Track objects
         """
-        # Step 1: Mark all existing tracks as potentially lost
+        # Step 1: Kalman predict for all existing tracks + mark as unmatched
         for track in self._tracks:
-            if track.state in (TrackState.NEW, TrackState.ACTIVE):
-                track.state = TrackState.LOST
-                track.lost_count += 1
-            elif track.state == TrackState.LOST:
-                track.lost_count += 1
+            if track.state != TrackState.REMOVED:
+                track.predict()
+                track.lost_count += 1  # Assume unmatched; reset if matched
 
         if not detections:
-            # No detections → just age tracks
+            # No detections → mark all as LOST, cleanup
+            for track in self._tracks:
+                if track.state in (TrackState.NEW, TrackState.ACTIVE):
+                    track.state = TrackState.LOST
             self._cleanup_lost_tracks()
             return self.tracks
 
-        # Step 2: Compute IoU between detections and existing tracks
-        active_tracks = [t for t in self._tracks if t.state != TrackState.REMOVED]
+        # Step 2: Split detections into high and low confidence
+        high_dets = []
+        low_dets = []
+        high_indices = []
+        low_indices = []
 
-        if active_tracks:
-            det_bboxes = [d["bbox"] for d in detections]
-            iou_matrix = compute_iou_matrix(det_bboxes, active_tracks)
+        for i, det in enumerate(detections):
+            if det["confidence"] >= self._high_threshold:
+                high_dets.append(det)
+                high_indices.append(i)
+            elif det["confidence"] >= self._low_threshold:
+                low_dets.append(det)
+                low_indices.append(i)
 
-            # Greedy matching (Hungarian would be overkill for <10 faces)
-            matched_dets = set()
-            matched_trks = set()
+        # Get matchable tracks
+        active_trks = [t for t in self._tracks if t.state != TrackState.REMOVED]
 
-            # Sort by IoU descending for greedy assignment
-            pairs = []
-            for i in range(len(detections)):
-                for j in range(len(active_tracks)):
-                    if iou_matrix[i, j] >= self._iou_threshold:
-                        pairs.append((iou_matrix[i, j], i, j))
-            pairs.sort(reverse=True)
+        # Step 3: First association — high-conf detections vs all tracks
+        matched_global_det_indices = set()
+        matched_trk_set = set()
 
-            for iou_val, det_idx, trk_idx in pairs:
-                if det_idx in matched_dets or trk_idx in matched_trks:
-                    continue
-                # Match found
-                track = active_tracks[trk_idx]
-                det = detections[det_idx]
-                track.bbox = det["bbox"]
-                track.landmarks = det["landmarks"]
-                track.confidence = det["confidence"]
-                track.state = TrackState.ACTIVE
-                track.lost_count = 0
-                track.frame_count += 1
-                track.last_seen_frame = frame_id
-                matched_dets.add(det_idx)
-                matched_trks.add(trk_idx)
+        if high_dets and active_trks:
+            det_bboxes = [d["bbox"] for d in high_dets]
+            iou_matrix = compute_iou_matrix(det_bboxes, active_trks)
+            cost_matrix = 1.0 - iou_matrix
 
-            # Step 3: Fallback centroid matching for unmatched detections
-            # Helps when person moves fast (IoU=0 but centroid still close)
-            unmatched_det_indices = [i for i in range(len(detections)) if i not in matched_dets]
-            unmatched_trk_indices = [j for j in range(len(active_tracks)) if j not in matched_trks]
+            matches, unmatched_d, unmatched_t = linear_assignment(
+                cost_matrix, threshold=1.0 - self._iou_threshold
+            )
 
-            if unmatched_det_indices and unmatched_trk_indices:
-                centroid_pairs = []
-                for i in unmatched_det_indices:
-                    det_bbox = detections[i]["bbox"]
-                    det_cx = (det_bbox[0] + det_bbox[2]) / 2
-                    det_cy = (det_bbox[1] + det_bbox[3]) / 2
-                    for j in unmatched_trk_indices:
-                        trk_bbox = active_tracks[j].bbox
-                        trk_cx = (trk_bbox[0] + trk_bbox[2]) / 2
-                        trk_cy = (trk_bbox[1] + trk_bbox[3]) / 2
-                        dist = ((det_cx - trk_cx) ** 2 + (det_cy - trk_cy) ** 2) ** 0.5
-                        if dist < self._centroid_dist_threshold:
-                            centroid_pairs.append((dist, i, j))
+            for det_idx, trk_idx in matches:
+                det = high_dets[det_idx]
+                track = active_trks[trk_idx]
+                track.update_bbox(det["bbox"], det["landmarks"],
+                                  det["confidence"], frame_id)
+                matched_trk_set.add(id(track))
+                matched_global_det_indices.add(high_indices[det_idx])
 
-                centroid_pairs.sort()  # Closest first
-                for dist, det_idx, trk_idx in centroid_pairs:
-                    if det_idx in matched_dets or trk_idx in matched_trks:
-                        continue
-                    track = active_tracks[trk_idx]
-                    det = detections[det_idx]
-                    track.bbox = det["bbox"]
-                    track.landmarks = det["landmarks"]
-                    track.confidence = det["confidence"]
-                    track.state = TrackState.ACTIVE
-                    track.lost_count = 0
-                    track.frame_count += 1
-                    track.last_seen_frame = frame_id
-                    matched_dets.add(det_idx)
-                    matched_trks.add(trk_idx)
-
-            # Step 4: Create new tracks for still-unmatched detections
-            for i, det in enumerate(detections):
-                if i not in matched_dets:
-                    self._create_track(det, frame_id)
+            unmatched_trk_list = [active_trks[i] for i in unmatched_t]
         else:
-            # No existing tracks → all detections are new
-            for det in detections:
-                self._create_track(det, frame_id)
+            unmatched_trk_list = list(active_trks)
 
-        # Step 4: Cleanup lost tracks
+        # Step 4: Second association — low-conf detections vs unmatched tracks
+        if low_dets and unmatched_trk_list:
+            det_bboxes = [d["bbox"] for d in low_dets]
+            iou_matrix = compute_iou_matrix(det_bboxes, unmatched_trk_list)
+            cost_matrix = 1.0 - iou_matrix
+
+            matches2, _, _ = linear_assignment(
+                cost_matrix, threshold=1.0 - (self._iou_threshold * 0.7)
+            )
+
+            for det_idx, trk_idx in matches2:
+                det = low_dets[det_idx]
+                track = unmatched_trk_list[trk_idx]
+                track.update_bbox(det["bbox"], det["landmarks"],
+                                  det["confidence"], frame_id)
+                matched_trk_set.add(id(track))
+                matched_global_det_indices.add(low_indices[det_idx])
+
+        # Step 5: Create new tracks for unmatched high-conf detections
+        new_track_ids = set()
+        for i, det in enumerate(high_dets):
+            if high_indices[i] not in matched_global_det_indices:
+                new_track = self._create_track(det, frame_id)
+                if new_track:
+                    new_track_ids.add(id(new_track))
+
+        # Step 6: Update states for unmatched tracks (skip newly created)
+        for track in self._tracks:
+            if track.state == TrackState.REMOVED:
+                continue
+            if id(track) in matched_trk_set:
+                continue
+            if id(track) in new_track_ids:
+                continue
+            # This track was not matched → mark as LOST
+            if track.state in (TrackState.NEW, TrackState.ACTIVE):
+                track.state = TrackState.LOST
+
+        # Step 7: Cleanup
         self._cleanup_lost_tracks()
 
         return self.tracks
@@ -339,9 +486,9 @@ class FaceTracker:
         return track
 
     def _cleanup_lost_tracks(self) -> None:
-        """Remove tracks that have been lost too long."""
+        """Remove tracks exceeding max_lost frames."""
         for track in self._tracks:
-            if track.state == TrackState.LOST and track.lost_count > self._max_lost:
+            if track.state != TrackState.REMOVED and track.lost_count > self._max_lost:
                 track.state = TrackState.REMOVED
                 logger.info(
                     "event=track_removed | track_id={tid} | lost_frames={lf} | "
@@ -350,24 +497,11 @@ class FaceTracker:
                     ident=track.identity or "unknown", tf=track.frame_count,
                 )
 
-        # Purge removed tracks from list to prevent unbounded growth
+        # Purge removed tracks
         self._tracks = [t for t in self._tracks if t.state != TrackState.REMOVED]
 
     def get_tracks_needing_embedding(self, frame_id: int) -> list[Track]:
-        """
-        Get tracks that need embedding extraction.
-
-        Returns tracks that are:
-        - NEW (never embedded)
-        - ACTIVE but unidentified
-        - ACTIVE and due for re-verification
-
-        Args:
-            frame_id: Current frame number
-
-        Returns:
-            List of tracks needing embedding
-        """
+        """Get tracks that need embedding extraction."""
         result = []
         for track in self._tracks:
             if track.state == TrackState.REMOVED:
