@@ -1,396 +1,406 @@
-# Smart Cabin Platform — Vision Document
+# Smart Cabin Platform — Vision & Technical Overview
 
 > Biến cabin thang máy thành không gian thông minh, cá nhân hóa, kết nối.
 
 ---
 
-## 1. Vision Statement
+## 1. Tổng quan hệ thống
 
-**Smart Cabin** là nền tảng AI/IoT mở, biến cabin thang máy — một không gian mà hàng trăm người đi qua mỗi ngày — từ "dead space" thành một điểm chạm thông minh: nhận biết cư dân, hiển thị nội dung cá nhân hóa, giao tiếp bằng giọng nói, thu thập dữ liệu vận hành, và kết nối với hệ thống quản lý tòa nhà (BMS).
+**Smart Cabin** là nền tảng edge AI chạy trên máy tính nhúng (Orange Pi 4 Pro), đặt trong cabin thang máy, kết nối với bộ điều khiển thang máy qua MQTT. Hệ thống thực hiện:
 
-Platform được thiết kế theo kiến trúc **plugin-based**, cho phép khách hàng chọn và kết hợp các module phù hợp với nhu cầu: từ chung cư cao cấp đến văn phòng, bệnh viện, hay trung tâm thương mại.
+1. **Nhận diện cư dân** — Face recognition real-time (SCRFD + MobileFaceNet)
+2. **Hiển thị cá nhân hóa** — Nội dung riêng cho từng người trên display (web-based)
+3. **Tự động gọi tầng** — Nhận diện → lookup floor → MQTT command đến elevator controller
+4. **Thu thập dữ liệu** — Sensor data từ elevator controller (qua MQTT), traffic patterns
+5. **Giao tiếp giọng nói** — TTS chào hỏi, thông báo (speaker trực tiếp)
 
----
-
-## 2. Problem & Opportunity
-
-### Thực trạng
-
-| Vấn đề | Chi tiết |
-|--------|----------|
-| Dead space | Cabin thang máy chiếm ~2m2, hàng trăm lượt/ngày, nhưng không khai thác giá trị |
-| Thông tin một chiều | Bảng thông báo giấy, poster cũ, không cập nhật |
-| Không nhận biết | Thang máy không biết ai đang đi, không thể cá nhân hóa |
-| Vận hành mù | Không có dữ liệu: bao nhiêu người, giờ cao điểm, tình trạng cabin |
-| An ninh hạn chế | Camera CCTV record nhưng không phân tích real-time |
-
-### Cơ hội
-
-- **50-200 lượt đi/ngày** mỗi cabin → touchpoint tiếp cận cư dân lớn
-- **Dwell time 30-60s** → đủ thời gian truyền tải thông tin
-- **Captive audience** → tỷ lệ chú ý cao hơn quảng cáo ngoài trời
-- **Data goldmine** → traffic patterns, occupancy, behavioral insights
-- **Xu hướng smart building** → BMS integration, ESG reporting, proptech investment tăng
-
----
-
-## 3. Value Proposition
-
-### Theo stakeholder
-
-| Stakeholder | Giá trị nhận được |
-|-------------|-------------------|
-| **Cư dân / Nhân viên** | Trải nghiệm cá nhân hóa (chào hỏi, nhắc lịch, thông báo), tiện lợi (tự gọi tầng), an toàn |
-| **Chủ đầu tư / BMS** | Data vận hành (occupancy, peak hours), tiết kiệm năng lượng, tăng giá trị bất động sản, doanh thu quảng cáo |
-| **Ban quản lý tòa nhà** | Thông báo tức thời (sự cố, bảo trì), giám sát an ninh, kiểm soát truy cập |
-| **Nhà quảng cáo** | Targeted ads (theo demographics, tầng, thời điểm), đo lường impression chính xác (face detection = viewability) |
-| **Đơn vị bảo trì thang máy** | Predictive maintenance data (rung lắc, nhiệt, tần suất), giảm downtime |
-
-### Unique Selling Points
-
-1. **Edge AI First** — Xử lý hoàn toàn tại chỗ, không phụ thuộc cloud, privacy-compliant (face data không rời device)
-2. **Plugin Architecture** — Modular, khách hàng chọn features cần, upgrade dần
-3. **Personalization at Scale** — Nhận diện → nội dung riêng cho từng người, không phải broadcast chung
-4. **Platform Play** — Không bán hardware thuần, bán platform + ecosystem (content marketplace, ad network, BMS integration)
-5. **Hardware Agnostic Display** — Support HDMI/Tablet/Web, khách hàng chọn display phù hợp budget
-
----
-
-## 4. Use Cases by Vertical
-
-### 4.1 Chung cư cao cấp (Luxury Residential)
-
-| Feature | Mô tả |
-|---------|--------|
-| Chào hỏi cá nhân | "Xin chào anh Minh, chúc buổi sáng tốt lành" |
-| Thông báo cá nhân | "Anh có bưu kiện tại sảnh", "Phí quản lý tháng 8 đã đến hạn" |
-| Thời tiết + giao thông | Hiển thị thời tiết, tình trạng giao thông theo tuyến đường thường đi |
-| Quảng cáo targeted | Spa, gym, nhà hàng trong tòa nhà — theo demographics |
-| Access log | Ghi nhận ai vào/ra, thời điểm (cho BMS dashboard) |
-| Emergency broadcast | Thông báo cháy, động đất, sơ tán — override mọi content |
-
-**Kịch bản mẫu:**
-> Anh Minh (P0820) bước vào thang máy lúc 7:45 sáng. Camera nhận diện → Display hiện: "Chào anh Minh! Hôm nay 32°C, có mưa chiều. Bưu kiện #2847 đang chờ tại sảnh." Speaker: "Xin chào anh Minh". Thang tự gọi tầng 8 qua MQTT → elevator controller chọn tầng.
-
-### 4.2 Tòa nhà văn phòng (Office Building)
-
-| Feature | Mô tả |
-|---------|--------|
-| Access Control | Chỉ cho phép nhân viên đã đăng ký sử dụng thang |
-| Auto Floor Call | Nhận diện → tự gọi tầng làm việc (MQTT → elevator controller) |
-| Floor routing | Nhiều người cùng cabin → gọi nhiều tầng tương ứng |
-| Meeting reminder | "Cuộc họp 9:00 tại phòng 15A" (sync calendar) |
-| Phân luồng giờ cao điểm | Analytics → suggest thời điểm tránh đông |
-| Quảng cáo nội bộ | HR announcements, company events, new hire welcome |
-| Visitor management | Khách chưa đăng ký → hiển thị hướng dẫn, QR check-in |
-
-### 4.3 Bệnh viện (Healthcare)
-
-| Feature | Mô tả |
-|---------|--------|
-| Strict access | Chỉ nhân viên có badge/face mới dùng thang chuyên dụng |
-| Hygiene monitoring | Cảm biến nhiệt (phát hiện sốt), nhắc rửa tay |
-| Emergency priority | Bác sĩ/y tá → ưu tiên thang, bỏ qua queue |
-| Wayfinding | "Khoa Tim mạch: Tầng 7, rẽ trái" cho bệnh nhân/khách |
-| Load monitoring | Giám sát trọng tải (cáng, xe đẩy) |
-| Sterilization alert | Nhắc lịch vệ sinh cabin |
-
-### 4.4 Trung tâm thương mại (Commercial / Retail)
-
-| Feature | Mô tả |
-|---------|--------|
-| Quảng cáo CPM | Tính impression dựa face detection (viewability metric) |
-| Demographic targeting | Tuổi, giới tính → quảng cáo phù hợp (future: age/gender estimation) |
-| Wayfinding interactive | "Tầng 3: Thời trang, Tầng 5: Ẩm thực" |
-| Event promotion | Flash sale, sự kiện đang diễn ra |
-| Traffic analytics | Footfall counting, peak hours, dwell time per floor |
-| Revenue reporting | Dashboard cho landlord: impressions, engagement, revenue |
-
----
-
-## 5. Feature Matrix & Roadmap
-
-### Feature Matrix
-
-| Feature | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
-|---------|:-------:|:-------:|:-------:|:-------:|
-| Face Recognition | Done | Done | Done | Done |
-| Face Tracking (IoU) | Done | Done | Done | Done |
-| Event Bus + MQTT Sync | Done | Done | Done | Done |
-| Structured Logging | Done | Done | Done | Done |
-| **Personalized Display** | - | **Next** | Done | Done |
-| Content Management | - | Next | Done | Done |
-| Ad Scheduling | - | Next | Done | Done |
-| **Auto Floor Call (MQTT)** | - | **Next** | Done | Done |
-| **People Counting** | - | - | Next | Done |
-| **TTS / Voice Greeting** | - | - | Next | Done |
-| **Sensor Suite** | - | - | Next | Done |
-| Occupancy Analytics | - | - | Next | Done |
-| BMS Integration | - | - | - | Next |
-| Predictive Maintenance | - | - | - | Next |
-| Multi-cabin Orchestration | - | - | - | Next |
-
-### Roadmap
+### Kiến trúc tổng quan
 
 ```
-Phase 1: Camera AI (DONE)                    Phase 2: Smart Display + Floor Call (NEXT)
-Q3 2026                                       Q4 2026
-┌─────────────────────────┐                  ┌─────────────────────────┐
-│ Face Detection (SCRFD)  │                  │ Personalized Display    │
-│ Face Embedding (MFNet)  │                  │ Content Management      │
-│ Face Tracking (IoU)     │                  │ Web Display Engine      │
-│ Face Database (SQLite)  │                  │ Ad Scheduling           │
-│ MQTT Cloud Sync         │                  │ Display REST API        │
-│ Plugin Architecture     │                  │ Cloud Content Sync      │
-│ Data Collection         │                  │ ServicePlugin Base      │
-└─────────────────────────┘                  │ Auto Floor Call (MQTT)  │
-                                              └─────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│                      Smart Cabin Edge Device                      │
+│                                                                   │
+│  ┌────────────────────┐   ┌────────────────────────────────────┐  │
+│  │   Hardware I/O     │   │         Software Platform          │  │
+│  │                    │   │                                    │  │
+│  │  Camera (RTSP) ────────→ Video Pipeline → Face Recognition  │  │
+│  │  Speaker (USB) ←────────── Audio Manager (TTS)              │  │
+│  │  Microphone (USB)──────→ (Future: voice commands)           │  │
+│  │  Display (HDMI/Web)←────── Display Engine (WebSocket)       │  │
+│  └────────────────────┘   │                                    │  │
+│                           │  Event Bus (pub/sub)               │  │
+│                           │       ↕                            │  │
+│                           │  Plugin Manager                    │  │
+│                           │   ├── face_recognition (Frame)     │  │
+│                           │   ├── display (Service)            │  │
+│                           │   ├── elevator (Service)           │  │
+│                           │   ├── sensors (Service)            │  │
+│                           │   └── audio (Service)              │  │
+│                           │                                    │  │
+│                           │  MQTT Client (Cloud Sync)          │  │
+│                           └────────────────────────────────────┘  │
+└───────────────────────────────────┬───────────────────────────────┘
+                                    │ MQTT
+                                    ▼
+                ┌───────────────────────────────────────┐
+                │         MQTT Broker (Mosquitto)       │
+                └──────┬─────────────────┬──────────────┘
+                       │                 │
+                       ▼                 ▼
+        ┌──────────────────────┐  ┌──────────────────────┐
+        │  Elevator Controller │  │    Cloud Backend     │
+        │  (sensor data, floor │  │  (dashboard, content │
+        │   call response)     │  │   management, logs)  │
+        └──────────────────────┘  └──────────────────────┘
+```
 
-Phase 3: Sensor & Voice                      Phase 4: Building Integration
-Q1-Q2 2027                                    Q3-Q4 2027
-┌─────────────────────────┐                  ┌─────────────────────────┐
-│ People Counting (YOLO)  │                  │ BMS Protocol (BACnet)   │
-│ TTS Voice Greeting      │                  │ Multi-cabin Management  │
-│ Temperature Sensor      │                  │ Predictive Maintenance  │
-│ Vibration Sensor        │                  │ Energy Optimization     │
-│ Air Quality Sensor      │                  │ Visitor Management      │
-│ Load Cell (weight)      │                  │ Mobile App Integration  │
-│ Occupancy Analytics     │                  │ Advanced Floor Routing  │
-└─────────────────────────┘                  └─────────────────────────┘
+### Kết nối phần cứng
+
+| Kết nối trực tiếp (Orange Pi) | Nhận qua MQTT (từ elevator controller) |
+| --------------------------------- | ---------------------------------------- |
+| Camera IP (RTSP stream)           | Nhiệt độ / Độ ẩm cabin             |
+| Speaker (USB/3.5mm)               | Rung lắc (vibration)                    |
+| Microphone (USB)                  | Trọng tải cabin                        |
+| Display (HDMI hoặc Web)          | Trạng thái cửa (mở/đóng)           |
+|                                   | Tầng hiện tại                         |
+|                                   | Mã lỗi / cảnh báo                    |
+
+---
+
+## 2. Khả năng hệ thống (System Capabilities)
+
+### Phase 1 — Camera AI (DONE)
+
+| Capability      | Mô tả                                                        | Status |
+| --------------- | -------------------------------------------------------------- | ------ |
+| Face Detection  | SCRFD-500M, 5-point landmarks, ~15ms/frame                     | Done   |
+| Face Embedding  | MobileFaceNet w600k_mbf, 512-dim, cosine matching              | Done   |
+| Face Tracking   | IoU + centroid tracker, giảm 80-90% embedding calls           | Done   |
+| Face Database   | SQLite, multi-embedding per person, CRUD                       | Done   |
+| Face Enrollment | CLI tool + ảnh, support nhiều ảnh/người                   | Done   |
+| Video Pipeline  | RTSP capture, per-callback FPS scheduler, auto-reconnect       | Done   |
+| Plugin System   | BasePlugin (frame-driven), config-driven loading, auto-disable | Done   |
+| Event Bus       | Thread-safe pub/sub, Pydantic validation, wildcard             | Done   |
+| MQTT Sync       | paho-mqtt, event bridge, offline buffer, heartbeat             | Done   |
+| Data Collection | Video recorder, snapshots, auto face crop (PNG)                | Done   |
+| Logging         | Loguru, module-based files, key-value structured format        | Done   |
+
+### Phase 2 — Display + Auto Floor Call (NEXT)
+
+| Capability           | Mô tả                                                 | Dependencies                    |
+| -------------------- | ------------------------------------------------------- | ------------------------------- |
+| ServicePlugin        | Event-driven plugin base (không cần video frames)     | Plugin Manager update           |
+| Personalized Display | Nhận diện → nội dung cá nhân hóa trên screen    | ServicePlugin, Face Recognition |
+| Content Management   | CRUD content, zones, rules, scheduling (SQLite)         | —                              |
+| Web Display Engine   | FastAPI + WebSocket, real-time push, HTML/CSS/JS client | FastAPI, uvicorn                |
+| Auto Floor Call      | face.recognized → lookup floor → MQTT publish         | ServicePlugin, Face DB          |
+| Display REST API     | Content CRUD, rules, preview, status                    | FastAPI                         |
+| Cloud Content Sync   | Cloud push content/rules via MQTT → local store        | CloudSync                       |
+
+### Phase 3 — Sensors + Voice (Future)
+
+| Capability         | Mô tả                                            | Dependencies        |
+| ------------------ | -------------------------------------------------- | ------------------- |
+| Sensor Plugin      | Subscribe MQTT sensor data từ elevator controller | ServicePlugin, MQTT |
+| TTS Voice Greeting | edge-tts / pyttsx3, chào hỏi khi nhận diện     | Speaker hardware    |
+| People Counting    | YOLO-based, cabin occupancy                        | Video Pipeline      |
+| Alert System       | Threshold alerts (nhiệt, quá tải, rung)         | Sensor Plugin       |
+
+### Phase 4 — Building Integration (Future)
+
+| Capability             | Mô tả                                       |
+| ---------------------- | --------------------------------------------- |
+| BMS Protocol           | BACnet/Modbus gateway                         |
+| Multi-cabin            | Quản lý nhiều cabin từ 1 cloud            |
+| Advanced Floor Routing | Phân luồng tối ưu giờ cao điểm         |
+| Predictive Maintenance | Phân tích vibration data → dự đoán lỗi |
+
+---
+
+## 3. Hardware Platform
+
+### Edge Device: Orange Pi 4 Pro
+
+| Spec         | Value                                             |
+| ------------ | ------------------------------------------------- |
+| SoC          | Rockchip RK3399 (2× Cortex-A72 + 4× Cortex-A53) |
+| RAM          | 4GB LPDDR4                                        |
+| GPU          | Mali-T860 (unused — CPU inference đủ nhanh)    |
+| NPU          | Không có (RK3399, không phải RK3399Pro)       |
+| Storage      | 32GB microSD (OS) + 128GB USB (data)              |
+| Connectivity | Gigabit Ethernet, WiFi, USB 3.0, HDMI 2.0         |
+| OS           | Debian 12 / Ubuntu (ARM64)                        |
+| Power        | 5V/4A, ~10-15W under load                         |
+
+### Hardware BOM (PoC)
+
+| Component             | Model                                 | Giá (USD)          | Ghi chú                             |
+| --------------------- | ------------------------------------- | ------------------- | ------------------------------------ |
+| SBC                   | Orange Pi 4 Pro                       | ~$55                |                                      |
+| Camera                | IP Camera 2MP RTSP                    | ~$30                | Hikvision/Dahua                      |
+| Display               | 10" IPS (hoặc laptop/tablet cho PoC) | ~$0-120             | Web display — dùng device có sẵn |
+| Speaker               | 3W USB/3.5mm                          | ~$10                |                                      |
+| Storage               | microSD 32GB + USB 128GB              | ~$20                |                                      |
+| PSU                   | 5V/4A                                 | ~$8                 |                                      |
+| Enclosure             | Metal/3D print                        | ~$15                |                                      |
+| **Total (PoC)** |                                       | **~$140-260** | Tùy có display hay dùng sẵn      |
+
+> **PoC approach**: Display dùng web-based — bất kỳ laptop/tablet mở browser là display client. Không cần mua display riêng.
+
+### Inference Performance (trên Orange Pi 4 Pro)
+
+| Model                          | Task                     | Latency  | Note                      |
+| ------------------------------ | ------------------------ | -------- | ------------------------- |
+| SCRFD-500M (det_500m.onnx)     | Face Detection           | ~10-15ms | OpenCV DNN, ARM NEON      |
+| MobileFaceNet (w600k_mbf.onnx) | Face Embedding           | ~20-30ms | 512-dim vector            |
+| Full pipeline (5fps)           | Detect+Track+Embed+Match | ~50-80ms | Chỉ embed khi track mới |
+
+---
+
+## 4. Software Stack
+
+| Layer          | Technology                                  | Lý do chọn                         |
+| -------------- | ------------------------------------------- | ------------------------------------ |
+| Language       | Python 3.12+                                | Fast prototyping, ML ecosystem       |
+| Inference      | OpenCV DNN (fallback) + C++ NCNN (optional) | ARM NEON optimized                   |
+| Face Detection | SCRFD-500M (InsightFace buffalo_s)          | Best accuracy/speed tradeoff cho ARM |
+| Face Embedding | MobileFaceNet w600k_mbf (InsightFace)       | 1M params, 99.4% LFW                 |
+| Database       | SQLite                                      | Lightweight, embedded, no server     |
+| MQTT           | paho-mqtt                                   | Standard IoT protocol                |
+| Display Server | FastAPI + WebSocket + uvicorn               | Async, auto-docs, lightweight        |
+| Display Client | HTML + CSS + Vanilla JS                     | No build step, fast load             |
+| TTS            | edge-tts (online) / pyttsx3 (offline)       | Vietnamese support                   |
+| Logging        | Loguru                                      | Structured, rotation, module-based   |
+| Config         | YAML + Pydantic                             | Validation, env var override         |
+| Process        | systemd service                             | Native Linux, auto-restart           |
+
+---
+
+## 5. Plugin Architecture
+
+Hệ thống sử dụng 2 loại plugin:
+
+### FramePlugin (camera-driven)
+
+- Nhận video frames từ pipeline
+- Xử lý frame-by-frame (face detection, people counting...)
+- Interface: `initialize()`, `process_frame(frame, frame_id, ts)`, `shutdown()`
+
+### ServicePlugin (event-driven)
+
+- Không nhận frames, chỉ nhận events từ EventBus
+- Quản lý subsystem (display, elevator, sensors, audio)
+- Interface: `start()`, `handle_event(event)`, `stop()`, `health_check()`
+
+### Danh sách plugins
+
+| Plugin               | Type          | Phase    | Mô tả                                             |
+| -------------------- | ------------- | -------- | --------------------------------------------------- |
+| `face_recognition` | FramePlugin   | 1 (done) | Detect → track → embed → match → publish events |
+| `display`          | ServicePlugin | 2 (next) | Personalized content trên web display              |
+| `elevator`         | ServicePlugin | 2 (next) | Auto floor call via MQTT                            |
+| `sensors`          | ServicePlugin | 3        | MQTT subscriber cho sensor data từ controller      |
+| `audio`            | ServicePlugin | 3        | TTS greeting, notification sounds                   |
+| `people_counter`   | FramePlugin   | 3        | YOLO-based counting                                 |
+
+---
+
+## 6. Communication Protocol
+
+### MQTT Topic Structure
+
+```
+Smart Cabin → Cloud/Controller:
+  cabin/{device_id}/face/recognized       # Person identified
+  cabin/{device_id}/face/unknown          # Unknown face
+  cabin/{device_id}/status/heartbeat      # System stats (30s interval)
+  cabin/{device_id}/display/status        # Current display state
+  cabin/{device_id}/system/start|stop|error
+
+Smart Cabin → Elevator Controller:
+  elevator/floor_call                     # Auto floor call command
+  
+Elevator Controller → Smart Cabin:
+  elevator/sensor_data                    # Sensor readings (temp, vibration, load...)
+
+Cloud → Smart Cabin:
+  cabin/{device_id}/display/content/push  # Push display content
+  cabin/{device_id}/display/rules/push    # Push personalization rules
+  cabin/{device_id}/command/+             # Commands (restart, sync, config)
+```
+
+### Giao tiếp với Elevator Controller
+
+| Direction          | Topic                    | Payload         | Ghi chú        |
+| ------------------ | ------------------------ | --------------- | --------------- |
+| Edge → Controller | `elevator/floor_call`  | TBD (chờ spec) | Gọi tầng      |
+| Controller → Edge | `elevator/sensor_data` | TBD (chờ spec) | Sensor readings |
+
+> **Note**: Payload format cho cả 2 chiều sẽ được xác định khi có spec từ đội elevator controller.
+
+---
+
+## 7. Use Cases (Kịch bản kỹ thuật)
+
+### 7.1 Auto Floor Call + Personalized Display
+
+```
+Timeline:
+  T+0ms     Camera capture frame
+  T+15ms    SCRFD detect face, extract landmarks
+  T+20ms    Tracker: new face → need embedding
+  T+50ms    MobileFaceNet extract 512-dim vector
+  T+55ms    Database: cosine match → person_id="0820", name="Sy", floor=8
+  T+60ms    EventBus publish: face.recognized {person_id, name, confidence, floor}
+  T+65ms    Elevator Plugin: MQTT publish floor_call {floor: 8}
+  T+70ms    Display Plugin: resolve content for person "0820"
+  T+100ms   WebSocket push: greeting "Xin chào anh Sy — Tầng 8"
+  T+600ms   Browser renders with fade-in animation
+
+Total latency: ~100ms (face → MQTT + display push)
+```
+
+### 7.2 Multi-person
+
+```
+Person A vào (t=0):
+  → Recognized: Sy (floor 8)
+  → MQTT: floor_call {floor: 8}
+  → Display: "Xin chào anh Sy — Tầng 8"
+
+Person B vào (t=2s):
+  → Recognized: Ngọc Cần (floor 6)
+  → MQTT: floor_call {floor: 6}
+  → Display: "Tầng 8 (Sy), Tầng 6 (Ngọc Cần)"
+
+Person C vào (t=4s):
+  → Unknown
+  → Không gọi tầng
+  → Display giữ nguyên (không hiện info cá nhân khi có stranger)
+```
+
+### 7.3 Offline Operation
+
+```
+Cloud mất kết nối:
+  → MQTT buffer messages locally (SQLite)
+  → Display vẫn hoạt động (content cached)
+  → Face recognition vẫn hoạt động (database local)
+  → Floor call vẫn hoạt động (MQTT đến controller qua local broker)
+  → Khi cloud reconnect → flush buffer
 ```
 
 ---
 
-## 6. Hardware BOM (Bill of Materials)
+## 8. Technical Constraints & Decisions
 
-### Tier 1: Basic (Camera AI Only) — Phase 1
-
-| Component | Model | Giá (USD) | Ghi chú |
-|-----------|-------|-----------|---------|
-| SBC | Orange Pi 4 Pro (RK3399, 4GB) | ~$55 | Edge compute |
-| Camera | IP Camera 2MP RTSP | ~$25-40 | Hikvision/Dahua mini |
-| Storage | 32GB microSD + 128GB USB | ~$20 | OS + data |
-| PSU | 5V/4A adapter | ~$8 | |
-| Enclosure | 3D printed / metal box | ~$15 | Gắn trần cabin |
-| **Total** | | **~$125-140** | |
-
-### Tier 2: Standard (+ Display + Speaker) — Phase 2
-
-| Component | Model | Giá (USD) | Ghi chú |
-|-----------|-------|-----------|---------|
-| Tier 1 (above) | | ~$130 | |
-| Display | 10.1" IPS (HDMI hoặc Android Tablet) | ~$80-150 | Touch optional |
-| Speaker | 3W mini speaker + amplifier | ~$10 | Cho TTS/notifications |
-| HDMI cable | Flat HDMI 2.0 | ~$5 | Nếu dùng HDMI display |
-| Mount | Display bracket (cabin wall) | ~$15 | |
-| **Total** | | **~$240-310** | |
-
-### Tier 3: Premium (Full Kit) — Phase 3-4
-
-| Component | Model | Giá (USD) | Ghi chú |
-|-----------|-------|-----------|---------|
-| Tier 2 (above) | | ~$275 | |
-| Temp/Humidity | DHT22 / SHT30 | ~$5 | I2C |
-| Vibration | ADXL345 3-axis accelerometer | ~$8 | I2C, predictive maintenance |
-| Air Quality | SGP30 / CCS811 | ~$12 | VOC, CO2 equivalent |
-| Load Cell | HX711 + 50kg cell | ~$10 | Trọng tải cabin |
-| Relay Module | 2-channel 5V relay | ~$5 | Elevator control |
-| Microphone | USB mini mic | ~$8 | Voice commands (future) |
-| GPIO Breakout | Header + wiring | ~$5 | |
-| **Total** | | **~$330-400** | |
-
-### Display Options (Chi tiết)
-
-| Option | Ưu điểm | Nhược điểm | Giá | Phù hợp |
-|--------|----------|------------|-----|----------|
-| **HDMI Display 10"** | Đơn giản, Orange Pi render trực tiếp | Cần HDMI cable, Orange Pi chịu tải render | $80-120 | PoC, small deploy |
-| **Android Tablet 10"** | Touch, có WiFi, chạy app riêng | Cần develop Android app hoặc dùng browser | $100-150 | Mid-range |
-| **Web Display (any screen)** | Flexible, bất kỳ device nào có browser | Cần WiFi local stable | $0 (dùng device có sẵn) | Flexible |
-| **Commercial display 15-21"** | Chuyên dụng, độ sáng cao, 24/7 | Đắt | $200-500 | Premium deploy |
-
-**Recommendation cho PoC**: Dùng **Web Display** approach — Orange Pi host local web server, bất kỳ tablet/TV nào mở browser đều là display. Không cần mua hardware mới, test trên laptop/tablet có sẵn.
+| Constraint                             | Impact                             | Decision                                     |
+| -------------------------------------- | ---------------------------------- | -------------------------------------------- |
+| RK3399 không có NPU                  | Không dùng RKNN acceleration     | OpenCV DNN (CPU, ARM NEON) đủ nhanh        |
+| 4GB RAM                                | Giới hạn model size + data cache | Lightweight models, bounded buffers          |
+| No GPU compute                         | Không dùng CUDA/OpenCL           | CPU-only inference, tối ưu NEON            |
+| Cabin environment (rung, nhiệt)       | Hardware reliability               | Industrial-grade enclosure, watchdog         |
+| Network không stable                  | MQTT disconnect possible           | Offline-first: local buffer, local DB        |
+| Privacy requirement                    | Face data không lên cloud        | Embeddings + matching hoàn toàn on-device  |
+| Elevator controller protocol chưa rõ | Payload format TBD                 | Abstract qua MQTT topic, plugin handle parse |
+| Display hardware chưa chốt           | Không biết screen nào           | Web-based: bất kỳ browser nào đều work  |
 
 ---
 
-## 7. Competitive Analysis
+## 9. Technical Roadmap (R&D Focus)
 
-### Existing Solutions
-
-| Giải pháp | Mô tả | Hạn chế | Smart Cabin khác biệt |
-|-----------|--------|---------|----------------------|
-| **Captivate (USA)** | Digital signage trong thang máy, content broadcast | Không AI, không cá nhân hóa, chỉ quảng cáo | Personalization + AI |
-| **Schindler DoorShow** | Màn hình trên cửa thang, tin tức/thời tiết | Tied to Schindler hardware, không mở | Platform mở, hardware agnostic |
-| **KovaiTech** | IoT sensors cho thang máy, predictive maintenance | Không display, không AI vision | Full experience (vision + display + sensors) |
-| **Vertical Impression** | Quảng cáo thang máy truyền thống | Poster/TV đơn giản, không targeting | AI targeting, measurable ROI |
-| **Kone DX** | Connected elevator, cloud monitoring | Enterprise only, đắt, closed ecosystem | Affordable, modular, open |
-
-### Competitive Advantages
-
-1. **Edge-first**: Data không rời device → privacy compliance (GDPR, PDPA), low latency
-2. **Open platform**: Không lock-in vendor, khách hàng own data
-3. **Modular pricing**: Trả cho what you use, không phải full suite
-4. **Developer-friendly**: Plugin SDK, REST API, MQTT — dễ integrate
-5. **Cost-effective**: Hardware BOM ~$130-400 vs enterprise solutions $2000+
-
----
-
-## 8. Business Model
-
-### Revenue Streams
+### Phase 2 — Immediate (Q4 2026)
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   Revenue Model                          │
-├──────────────────┬──────────────────────────────────────┤
-│ Hardware         │ One-time: Sell cabin kit (margin 30-40%)│
-│                  │ Tier 1: ~$200  Tier 2: ~$450          │
-│                  │ Tier 3: ~$600                          │
-├──────────────────┼──────────────────────────────────────┤
-│ SaaS Platform    │ Monthly subscription per cabin:       │
-│                  │ Basic: $15/cabin/month (cloud dashboard)│
-│                  │ Pro: $35/cabin/month (+analytics, API) │
-│                  │ Enterprise: Custom pricing             │
-├──────────────────┼──────────────────────────────────────┤
-│ Advertising      │ Revenue share model:                  │
-│                  │ Platform takes 30% of ad revenue       │
-│                  │ CPM model: $5-15 per 1000 impressions │
-│                  │ (verified by face detection)           │
-├──────────────────┼──────────────────────────────────────┤
-│ Integration      │ BMS integration fee: one-time setup   │
-│                  │ Custom plugin development              │
-│                  │ API access for 3rd party developers    │
-├──────────────────┼──────────────────────────────────────┤
-│ Data & Analytics │ Anonymized traffic data licensing     │
-│                  │ (aggregated, GDPR compliant)           │
-│                  │ Building intelligence reports          │
-└──────────────────┴──────────────────────────────────────┘
+Week 1-2:
+  ├── ServicePlugin base class
+  ├── Plugin Manager v2 (load both types)
+  └── Elevator Plugin (face → floor → MQTT)
+
+Week 3-4:
+  ├── Content model + SQLite storage
+  ├── Personalization engine (person → content resolution)
+  └── Web Display Engine (FastAPI + WebSocket)
+
+Week 5-6:
+  ├── Display Plugin integration (events → personalization → display)
+  ├── Display frontend (HTML/CSS/JS)
+  └── Content Management REST API
+
+Week 7-8:
+  ├── Cloud content sync (MQTT push)
+  ├── Face DB update (add default_floor)
+  ├── Enrollment tool update (--floor option)
+  └── End-to-end testing + performance tuning
 ```
 
-### Unit Economics (per cabin, monthly)
+### PoC Deliverables
 
-| Item | Revenue | Cost | Margin |
-|------|---------|------|--------|
-| SaaS subscription | $35 | $5 (cloud hosting) | $30 |
-| Advertising (avg) | $50 | $0 | $50 (×70% after rev share = $35) |
-| **Monthly margin/cabin** | | | **~$65** |
-| **Break-even** | | | **~4-6 months** (after hardware cost) |
-
-### Pricing Strategy
-
-| Package | Target | Hardware | Monthly | Features |
-|---------|--------|----------|---------|----------|
-| **Starter** | Small residential | Tier 1 (camera only) | $15/mo | Face recognition, access log, cloud dashboard |
-| **Smart** | Luxury residential | Tier 2 (+ display) | $35/mo | + Personalized display, notifications, ads |
-| **Premium** | Office/Commercial | Tier 3 (full kit) | $60/mo | + Sensors, voice, elevator control, analytics |
-| **Enterprise** | Hospital/Large | Custom | Negotiable | + BMS integration, SLA, on-premise option |
+| Deliverable          | Mô tả                                               | Success Criteria                        |
+| -------------------- | ----------------------------------------------------- | --------------------------------------- |
+| Auto Floor Call      | Nhận diện → MQTT floor command                     | Latency < 300ms, multi-person works     |
+| Personalized Display | Web page hiển thị nội dung theo người            | Latency < 500ms, smooth transitions     |
+| Content API          | REST CRUD cho content + rules                         | Swagger docs, all endpoints work        |
+| Multi-person         | Nhiều người → nhiều tầng, display update đúng | 3+ people tested                        |
+| 24h stability        | Chạy liên tục không crash/leak                    | Uptime > 99%, no memory growth          |
+| Offline resilience   | Mất cloud → vẫn hoạt động                       | Floor call + display work without cloud |
 
 ---
 
-## 9. Technical Principles
+## 10. PoC Success Criteria (Technical)
 
-| Principle | Rationale |
-|-----------|-----------|
-| **Edge-first processing** | Privacy (face data stays on device), low latency (<500ms), works offline |
-| **Plugin architecture** | Modular features, independent development, customer-configurable |
-| **Event-driven communication** | Loose coupling, extensible, real-time responsiveness |
-| **Web-based display** | Hardware agnostic, easy to update, no app store dependency |
-| **MQTT for cloud sync** | Lightweight IoT protocol, offline buffer, pub/sub fits our event model |
-| **Open standards** | REST API, WebSocket, MQTT, SQLite — no proprietary lock-in |
-| **Fail-safe design** | Each module degrades gracefully: no display? still log. No cloud? still work locally |
-
----
-
-## 10. Privacy & Compliance
-
-| Concern | Mitigation |
-|---------|-----------|
-| Face data | Embeddings stored on-device only. Raw images never uploaded to cloud. Option to disable face storage. |
-| GDPR/PDPA | Consent via building registration. Opt-out available. Data deletion on request. |
-| Camera in cabin | Clear signage "AI Camera Active". Compliant with local surveillance laws. |
-| Data retention | Configurable retention period. Auto-purge old logs. |
-| Third-party access | API access requires auth. Anonymized data only for analytics. |
-| Children | No face enrollment for minors. Age estimation (future) excludes children from targeting. |
+| Metric                         | Target                      | How to Measure                           |
+| ------------------------------ | --------------------------- | ---------------------------------------- |
+| Face recognition accuracy      | >95%                        | 20+ enrolled, 100+ test passes           |
+| Face → Floor Call latency     | <300ms                      | Timestamp diff (event → MQTT publish)   |
+| Face → Display update latency | <500ms                      | Timestamp diff (event → WebSocket push) |
+| System uptime                  | >99%                        | 30-day continuous run                    |
+| Memory stability               | No growth over 24h          | RSS monitoring, no leak                  |
+| CPU usage (all plugins)        | <50% sustained              | psutil monitoring                        |
+| Concurrent display clients     | 5+                          | WebSocket stress test                    |
+| Offline operation              | Full function without cloud | Disconnect cloud, verify all features    |
+| Face DB capacity               | 50+ persons, <100ms match   | Benchmark cosine search                  |
 
 ---
 
-## 11. Go-to-Market Strategy
+## 11. Risks (Technical)
 
-### Phase 1: PoC / Pilot (Current → Q4 2026)
-
-1. **Internal demo** — Full working prototype trên 1 cabin thật (DATGROUP office/building)
-2. **Refine** — Thu thập feedback từ cư dân/BMS team, iterate
-3. **Case study** — Document kết quả: adoption rate, engagement, issues
-
-### Phase 2: Early Adopters (Q1 2027)
-
-1. **Target**: 3-5 tòa chung cư cao cấp tại TP.HCM
-2. **Model**: Free hardware installation + discounted SaaS 6 tháng
-3. **Goal**: Validate product-market fit, collect testimonials
-
-### Phase 3: Scale (Q3 2027+)
-
-1. **Channel partners**: Đại lý thang máy, BMS integrators
-2. **Self-service**: Web portal đặt hàng + cấu hình
-3. **Content marketplace**: 3rd party content providers (tin tức, thời tiết, quảng cáo)
+| Risk                                        | Impact                   | Mitigation                                            |
+| ------------------------------------------- | ------------------------ | ----------------------------------------------------- |
+| Elevator controller MQTT format chưa rõ   | Block floor call feature | Abstract payload builder, mock controller for testing |
+| Display latency > 500ms                     | Bad UX                   | Profile bottleneck, optimize WebSocket push           |
+| WebSocket drops on unstable network         | Display freezes          | Auto-reconnect with exponential backoff               |
+| SQLite lock contention (multi-plugin write) | Data corruption          | WAL mode, separate DB per plugin                      |
+| Memory leak trong long-running service      | OOM after days           | Bounded buffers, periodic monitoring, restart policy  |
+| ARM thermal throttling                      | Performance drop         | Monitor CPU temp, optimize duty cycle                 |
+| Face recognition flicker (multi-face)       | Wrong floor call         | Tracker cooldown, confidence threshold for elevator   |
 
 ---
 
-## 12. Risks & Mitigations
+## 12. Reference
 
-| Risk | Impact | Probability | Mitigation |
-|------|--------|-------------|-----------|
-| Hardware theft/damage | High | Medium | Secure mounting, tamper detection, remote disable |
-| Privacy backlash | High | Low | Transparent policy, opt-out, no cloud face data |
-| Network instability | Medium | High | Offline-first design, local buffer, graceful degradation |
-| Low adoption (cư dân không care) | High | Medium | Focus on utility (thông báo, bưu kiện) not just ads |
-| Competition from elevator OEMs | Medium | Low | Open platform, price advantage, faster iteration |
-| Regulatory changes | Medium | Low | Modular compliance (disable features per region) |
-| Orange Pi EOL / supply chain | Low | Low | Abstract hardware layer, support multiple SBCs |
+| Document                        | Mô tả                                                                       |
+| ------------------------------- | ----------------------------------------------------------------------------- |
+| `docs/architecture_v2.md`     | Chi tiết kiến trúc: plugin system, display, sensors, elevator, MQTT topics |
+| `docs/display_module_plan.md` | Implementation plan chi tiết cho Display + Elevator (10 tasks)               |
+| `docs/implementation_plan.md` | Plan gốc Phase 1 (face recognition, 13 tasks)                                |
 
 ---
 
-## 13. Success Metrics
+## Appendix: Business Context (Tóm tắt)
 
-### PoC Success Criteria
+> Phần này giữ lại ở mức overview để team R&D hiểu context tại sao build.
 
-| Metric | Target | Measurement |
-|--------|--------|-------------|
-| Face recognition accuracy | >95% cho enrolled faces | Test với 20+ người, 100+ lượt |
-| Display update latency | <500ms (face → content change) | End-to-end timing |
-| System uptime | >99% (24/7 operation) | 30-day continuous run |
-| Content engagement | Cư dân nhìn display >3s | Eye gaze estimation (future) hoặc survey |
-| System cost (BOM) | <$300 cho Tier 2 | Actual procurement |
-| Monthly operating cost | <$10/cabin (cloud) | Server bills |
+**Target market**: Platform mở cho mọi loại tòa nhà (chung cư, văn phòng, bệnh viện, thương mại). Khách hàng chọn module phù hợp.
 
-### Scale Success Criteria (Post-pilot)
+**Revenue model**: Hardware (one-time) + SaaS subscription (monthly per cabin) + Advertising revenue share.
 
-| Metric | Target |
-|--------|--------|
-| Net Promoter Score (cư dân) | >40 |
-| Cabin deployments | 50+ trong 12 tháng |
-| Monthly recurring revenue | $5000+ |
-| Ad fill rate | >60% available slots filled |
-| Hardware failure rate | <2%/year |
+**Competitive edge**: Edge-first (privacy), modular (plugin-based), affordable ($140-260 BOM vs $2000+ enterprise), open platform (REST/MQTT/WebSocket).
+
+**GTM**: Internal pilot (DATGROUP building) → 3-5 early adopters → channel partners.
 
 ---
 
-## Appendix: Glossary
-
-| Term | Definition |
-|------|-----------|
-| Smart Cabin | Cabin thang máy được trang bị hệ thống AI/IoT |
-| Edge Device | Thiết bị xử lý tại chỗ (Orange Pi) |
-| BMS | Building Management System — hệ thống quản lý tòa nhà |
-| PoC | Proof of Concept — prototype chứng minh khả thi |
-| Dwell Time | Thời gian người ở trong cabin (30-60s trung bình) |
-| Impression | Một lượt hiển thị quảng cáo được xác nhận (có người nhìn) |
-| CPM | Cost Per Mille — giá per 1000 impressions |
-| Plugin | Module tính năng có thể bật/tắt độc lập |
-| ServicePlugin | Plugin event-driven (không cần video frames) |
-| FramePlugin | Plugin xử lý video frames (camera-driven) |
-
----
-
-*Document version: 1.0*
+*Document version: 2.0*
 *Created: 2026-08-14*
-*Author: DATGROUP — Smart Cabin Team*
+*Author: DATGROUP — Smart Cabin R&D*

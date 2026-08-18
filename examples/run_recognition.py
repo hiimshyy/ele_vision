@@ -116,6 +116,19 @@ def cmd_enroll(args):
         print("  ERROR: Face too small (min 60x60 px)")
         sys.exit(1)
 
+    # Quality check (blur detection)
+    x1, y1, x2, y2 = int(face.x1), int(face.y1), int(face.x2), int(face.y2)
+    h, w = frame.shape[:2]
+    crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+    if crop.size > 0:
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        quality = cv2.Laplacian(gray, cv2.CV_64F).var()
+        print(f"  Quality: {quality:.1f} (Laplacian variance)")
+        if quality < 30.0:
+            logger.error("event=enroll_failed | reason=face too blurry | quality={q:.1f}", q=quality)
+            print("  ERROR: Face too blurry. Use a clearer image.")
+            sys.exit(1)
+
     # Align
     aligned = align_face(frame, face.landmarks)
     if aligned is None:
@@ -132,21 +145,28 @@ def cmd_enroll(args):
 
     print(f"  Embedding: dim={embedding.shape[0]}, norm={np.linalg.norm(embedding):.4f}")
 
-    # Save to database
+    # Duplicate check
     db = FaceDatabase(args.db)
     db.initialize()
 
-    row_id = db.add_face(args.id, args.name, embedding)
+    existing_match = db.find_match(embedding, threshold=0.7)
+    if existing_match:
+        print(f"  WARNING: Very similar to existing person: {existing_match.name} "
+              f"(id={existing_match.person_id}, sim={existing_match.similarity:.3f})")
+
+    # Save to database
+    floor = getattr(args, "floor", None)
+    row_id = db.add_face(args.id, args.name, embedding, default_floor=floor)
     total = db.count()
     persons = db.count_persons()
     db.close()
 
     logger.info(
-        "event=enroll_success | person_id={pid} | name={name} | "
+        "event=enroll_success | person_id={pid} | name={name} | floor={f} | "
         "db_total={total} | db_persons={persons} | image={img}",
-        pid=args.id, name=args.name, total=total, persons=persons, img=args.image,
+        pid=args.id, name=args.name, f=floor, total=total, persons=persons, img=args.image,
     )
-    print(f"\n  Enrolled: {args.name} (id={args.id})")
+    print(f"\n  Enrolled: {args.name} (id={args.id}){f', floor={floor}' if floor else ''}")
     print(f"  Database: {total} embeddings, {persons} persons")
     print(f"  DB path:  {args.db}")
 
@@ -178,17 +198,25 @@ def cmd_list(args):
 
     print(f"\n  Face Database: {args.db}")
     print(f"  Total: {len(records)} embeddings")
-    print(f"  {'ID':<15} {'Name':<20} {'Dim':<5} {'Created'}")
-    print(f"  {'-'*15} {'-'*20} {'-'*5} {'-'*20}")
+    print(f"  {'ID':<15} {'Name':<20} {'Floor':<7} {'Emb':<5} {'Created'}")
+    print(f"  {'-'*15} {'-'*20} {'-'*7} {'-'*5} {'-'*20}")
 
-    seen_persons = set()
+    # Group by person
+    persons = {}
     for r in records:
-        created = time.strftime("%Y-%m-%d %H:%M", time.localtime(r.created_at))
-        dup = "" if r.person_id not in seen_persons else "(+)"
-        print(f"  {r.person_id:<15} {r.name:<20} {r.embedding_dim:<5} {created} {dup}")
-        seen_persons.add(r.person_id)
+        if r.person_id not in persons:
+            persons[r.person_id] = {
+                "name": r.name, "count": 0,
+                "created": r.created_at, "floor": r.default_floor,
+            }
+        persons[r.person_id]["count"] += 1
 
-    print(f"\n  Unique persons: {len(seen_persons)}")
+    for pid, info in sorted(persons.items()):
+        created = time.strftime("%Y-%m-%d %H:%M", time.localtime(info["created"]))
+        floor_str = str(info["floor"]) if info["floor"] is not None else "-"
+        print(f"  {pid:<15} {info['name']:<20} {floor_str:<7} {info['count']:<5} {created}")
+
+    print(f"\n  Unique persons: {len(persons)}")
 
 
 # --- REMOVE Command ---
@@ -612,6 +640,7 @@ Examples:
     p_enroll.add_argument("--image", required=True, help="Image file path")
     p_enroll.add_argument("--name", required=True, help="Person display name")
     p_enroll.add_argument("--id", required=True, help="Person unique ID")
+    p_enroll.add_argument("--floor", type=int, default=None, help="Default floor (elevator)")
 
     # List
     subparsers.add_parser("list", help="List enrolled faces")

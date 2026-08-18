@@ -20,53 +20,53 @@ Camera RTSP → VideoPipeline → FramePlugin (Face Recognition) → EventBus �
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        Smart Cabin Edge Platform                      │
+│                        Smart Cabin Edge Platform                    │
 ├─────────────────────────────────────────────────────────────────────┤
-│                                                                       │
-│  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌───────┐  ┌─────────┐  │
-│  │ Camera  │  │ Display  │  │ Sensors  │  │ Audio │  │  Relay  │  │
-│  │ (RTSP)  │  │ (Web/HDMI)│ │(I2C/GPIO)│  │ (TTS) │  │ (GPIO)  │  │
-│  └────┬────┘  └────┬─────┘  └────┬─────┘  └───┬───┘  └────┬────┘  │
-│       │             │             │             │            │        │
-│       ▼             ▼             ▼             ▼            ▼        │
-│  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌───────┐  ┌─────────┐  │
-│  │ Video   │  │ Display  │  │ Sensor   │  │ Audio │  │ Relay   │  │
-│  │Pipeline │  │ Engine   │  │ Manager  │  │Manager│  │Controller│ │
-│  └────┬────┘  └────┬─────┘  └────┬─────┘  └───┬───┘  └────┬────┘  │
-│       │             │             │             │            │        │
-│       ▼             ▼             ▼             ▼            ▼        │
-│  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌───────┐  ┌─────────┐  │
-│  │Frame    │  │ Display  │  │ Sensor   │  │ Audio │  │Elevator │  │
-│  │Plugins  │  │ Plugin   │  │ Plugin   │  │Plugin │  │ Plugin  │  │
-│  └────┬────┘  └────┬─────┘  └────┬─────┘  └───┬───┘  └────┬────┘  │
-│       │             │             │             │            │        │
-│       └─────────────┴─────────────┴─────────────┴────────────┘        │
-│                                   │                                    │
-│                            ┌──────▼──────┐                            │
-│                            │  Event Bus  │                            │
-│                            └──────┬──────┘                            │
-│                                   │                                    │
-│                    ┌──────────────┼──────────────┐                    │
-│                    ▼              ▼              ▼                     │
-│              ┌──────────┐  ┌──────────┐  ┌──────────┐                │
-│              │Cloud Sync│  │Local Log │  │  REST    │                │
-│              │  (MQTT)  │  │ (SQLite) │  │   API   │                │
-│              └──────────┘  └──────────┘  └──────────┘                │
+│                                                                     │
+│  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌───────┐  ┌─────────┐    │
+│  │ Camera  │  │ Display  │  │ Sensors  │  │ Audio │  │Elevator │    │
+│  │ (RTSP)  │  │ (Web/HDMI)│ │  (MQTT)  │  │(Spkr) │  │ (MQTT)  │    │
+│  └────┬────┘  └────┬─────┘  └────┬─────┘  └───┬───┘  └────┬────┘    │
+│       │            │             │            │           │         │
+│       ▼            ▼             ▼            ▼           ▼         │
+│  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌───────┐  ┌──────────┐   │
+│  │ Video   │  │ Display  │  │ Sensor   │  │ Audio │  │Elevator  │   │
+│  │Pipeline │  │ Engine   │  │ Plugin   │  │Manager│  │ Plugin   │   │
+│  └────┬────┘  └────┬─────┘  └────┬─────┘  └───┬───┘  └────┬─────┘   │
+│       │            │             │            │           │         │
+│       ▼            ▼             ▼            ▼           ▼         │
+│  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌───────┐  ┌─────────┐    │
+│  │Frame    │  │ Display  │  │ Sensor   │  │ Audio │  │Elevator │    │
+│  │Plugins  │  │ Plugin   │  │  Events  │  │Plugin │  │ Floor   │    │
+│  └────┬────┘  └────┬─────┘  └────┬─────┘  └───┬───┘  └────┬────┘    │
+│       │            │             │            │           │         │
+│       └────────────┴─────────────┴────────────┴───────────┘         │
+│                                  │                                  │
+│                           ┌──────▼──────┐                           │
+│                           │  Event Bus  │                           │
+│                           └──────┬──────┘                           │
+│                                  │                                  │
+│                   ┌──────────────┼──────────────┐                   │
+│                   ▼              ▼              ▼                   │
+│              ┌──────────┐  ┌──────────┐  ┌──────────┐               │
+│              │Cloud Sync│  │Local Log │  │  REST    │               │
+│              │  (MQTT)  │  │ (SQLite) │  │   API    │               │
+│              └──────────┘  └──────────┘  └──────────┘               │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Thay đổi chính
 
-| Thành phần | v1 | v2 |
-|-----------|----|----|
-| Plugin base class | `BasePlugin` (frame-driven only) | `FramePlugin` + `ServicePlugin` |
-| Plugin communication | EventBus (face events only) | EventBus (full event taxonomy) |
-| Hardware support | Camera only | Camera + Display + Sensors + Audio + Relay |
-| Display | Không có | DisplayEngine + WebSocket + Content Management |
-| Sensors | Không có | SensorManager (I2C, GPIO, UART) |
-| Audio | Không có | AudioManager (TTS, notification sounds) |
-| Relay | Không có | RelayController (GPIO, safety interlocks) |
-| Config | camera + mqtt + plugins + logging | + display + sensors + audio + relay |
+| Thành phần         | v1                                 | v2                                             |
+| -------------------- | ---------------------------------- | ---------------------------------------------- |
+| Plugin base class    | `BasePlugin` (frame-driven only) | `FramePlugin` + `ServicePlugin`            |
+| Plugin communication | EventBus (face events only)        | EventBus (full event taxonomy)                 |
+| Hardware support     | Camera only                        | Camera + Display + Speaker + Mic (trực tiếp) + Sensors/Elevator (MQTT) |
+| Display              | Không có                         | DisplayEngine + WebSocket + Content Management |
+| Sensors              | Không có                         | MQTT subscriber (data từ elevator controller)  |
+| Audio                | Không có                         | AudioManager (Speaker/Mic trực tiếp, TTS)      |
+| Elevator             | Không có                         | Auto Floor Call qua MQTT                       |
+| Config               | camera + mqtt + plugins + logging  | + display + sensors + audio + elevator         |
 
 ---
 
@@ -94,7 +94,7 @@ class BasePlugin(ABC):
 class ServicePlugin(ABC):
     """
     Event-driven plugin base class.
-    
+  
     Does NOT receive video frames. Instead:
     - Subscribes to EventBus events
     - Manages a subsystem (display, sensors, audio, relay)
@@ -169,12 +169,12 @@ class PluginManager:
 
 ### 2.3 Backward Compatibility
 
-| Concern | Solution |
-|---------|----------|
-| Existing `face_recognition` plugin | Unchanged. Still subclasses `BasePlugin`, still receives frames. |
-| Config format | `PluginEntry` unchanged. Plugin type auto-detected from class hierarchy. |
-| Event schemas | New event types ADDED, existing ones unchanged. |
-| Tests | All 222+ existing tests pass without modification. |
+| Concern                             | Solution                                                                   |
+| ----------------------------------- | -------------------------------------------------------------------------- |
+| Existing`face_recognition` plugin | Unchanged. Still subclasses`BasePlugin`, still receives frames.          |
+| Config format                       | `PluginEntry` unchanged. Plugin type auto-detected from class hierarchy. |
+| Event schemas                       | New event types ADDED, existing ones unchanged.                            |
+| Tests                               | All 222+ existing tests pass without modification.                         |
 
 ---
 
@@ -184,29 +184,29 @@ class PluginManager:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                    Display Subsystem                           │
+│                    Display Subsystem                         │
 ├──────────────────────────────────────────────────────────────┤
-│                                                                │
-│  EventBus ──→ DisplayPlugin (ServicePlugin)                   │
-│                     │                                          │
-│                     ├── PersonalizationEngine                  │
-│                     │       │                                  │
-│                     │       ├── Resolve person → content rules │
-│                     │       ├── Priority: personal > scheduled │
-│                     │       └── Multi-person handling          │
-│                     │                                          │
-│                     ├── ContentManager                         │
-│                     │       │                                  │
-│                     │       ├── Content CRUD (SQLite)          │
-│                     │       ├── Content scheduling             │
-│                     │       └── Zone layout management         │
-│                     │                                          │
-│                     └── DisplayEngine (abstract)               │
-│                             │                                  │
-│                             ├── WebDisplay (FastAPI+WebSocket) │
-│                             ├── HDMIDisplay (framebuffer)      │
-│                             └── RemoteDisplay (API push)       │
-│                                                                │
+│                                                              │
+│  EventBus ──→ DisplayPlugin (ServicePlugin)                  │
+│                   │                                          │
+│                   ├── PersonalizationEngine                  │
+│                   │       │                                  │
+│                   │       ├── Resolve person → content rules │
+│                   │       ├── Priority: personal > scheduled │
+│                   │       └── Multi-person handling          │
+│                   │                                          │
+│                   ├── ContentManager                         │
+│                   │       │                                  │
+│                   │       ├── Content CRUD (SQLite)          │
+│                   │       ├── Content scheduling             │
+│                   │       └── Zone layout management         │
+│                   │                                          │
+│                   └── DisplayEngine (abstract)               │
+│                           │                                  │
+│                           ├── WebDisplay (FastAPI+WebSocket) │
+│                           ├── HDMIDisplay (framebuffer)      │
+│                           └── RemoteDisplay (API push)       │
+│                                                              │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -257,24 +257,24 @@ class DisplayEngine(ABC):
 class WebDisplay(DisplayEngine):
     """
     Web-based display backend.
-    
+  
     Runs a local FastAPI server with WebSocket for real-time content push.
     Any device with a browser can be a display client.
-    
+  
     Architecture:
         FastAPI (port 8081)
         ├── GET /              → Display HTML page
         ├── GET /status        → JSON status
         ├── WS  /ws/display    → Real-time content push
         └── Static files       → CSS, JS, images
-    
+  
     WebSocket Protocol:
         Server → Client:
             {"action": "update_zone", "zone": "main", "content": {...}}
             {"action": "clear_zone", "zone": "top_bar"}
             {"action": "set_layout", "layout": "standard_3zone"}
             {"action": "transition", "zone": "main", "effect": "fade", "duration_ms": 500}
-        
+      
         Client → Server:
             {"action": "ready"}           # Client loaded, ready for content
             {"action": "heartbeat"}       # Keep-alive
@@ -397,64 +397,70 @@ PersonalizationEngine.resolve(person_id="0820", person_name="Sy")
 
 ## 4. Sensor Subsystem
 
-### 4.1 Architecture
+### 4.1 Kiến trúc thực tế
 
-```python
-# edge/core/sensor_manager.py (NEW)
+**Quan trọng**: Các sensor vật lý (nhiệt độ, rung, trọng tải, cửa...) **KHÔNG kết nối trực tiếp** với máy tính nhúng. Chúng được đọc bởi **bộ điều khiển thang máy** và gửi đến Smart Cabin edge device qua **MQTT**.
 
-class SensorType(str, Enum):
-    TEMPERATURE = "temperature"
-    HUMIDITY = "humidity"
-    VIBRATION = "vibration"
-    AIR_QUALITY = "air_quality"
-    LOAD_CELL = "load_cell"         # Cabin weight
-    DOOR_SENSOR = "door_sensor"     # Open/closed
-    MOTION = "motion"               # PIR motion detect
-
-class SensorReading(BaseModel):
-    sensor_type: SensorType
-    value: float
-    unit: str                       # "°C", "%", "g", "kg", "ppm"
-    timestamp: datetime
-    metadata: dict = {}
-
-class SensorManager:
-    """
-    Manages hardware sensors (I2C, GPIO, UART).
-    
-    Reads sensors periodically, publishes events to EventBus.
-    Supports threshold alerts (e.g., temperature > 40°C → alarm).
-    
-    Polling model:
-    - Fast sensors (vibration): 100Hz in dedicated thread
-    - Slow sensors (temp, humidity): every 5-30s
-    - Event sensors (door, motion): interrupt-based (GPIO callback)
-    """
-
-    def __init__(self, config: SensorConfig, event_bus: EventBus):
-        self._sensors: dict[str, BaseSensor] = {}
-        self._polling_thread: threading.Thread
-        self._alerts: list[AlertRule] = []
-
-    def register_sensor(self, sensor: BaseSensor) -> None: ...
-    def start(self) -> None: ...
-    def stop(self) -> None: ...
-    def get_latest(self, sensor_type: SensorType) -> SensorReading | None: ...
+```
+┌──────────────────────────────────┐     ┌─────────────────────────────┐
+│   Bộ điều khiển thang máy        │     │  Smart Cabin Edge Device     │
+│   (Elevator Controller)          │     │  (Orange Pi 4 Pro)           │
+│                                  │     │                              │
+│  ┌──────────┐  ┌──────────┐     │     │  ┌────────────────────────┐  │
+│  │Temp/Humid│  │ Vibration│     │     │  │ MQTT Subscriber        │  │
+│  │  Sensor  │  │  Sensor  │     │     │  │ (parse sensor data)    │  │
+│  └────┬─────┘  └────┬─────┘     │     │  └───────────┬────────────┘  │
+│       │              │           │     │              │               │
+│  ┌────┴─────┐  ┌────┴─────┐     │     │              ▼               │
+│  │Load Cell │  │Door Sensor│    │     │  ┌────────────────────────┐  │
+│  └────┬─────┘  └────┬─────┘     │     │  │ EventBus              │  │
+│       │              │           │     │  │ (sensor.reading, etc.) │  │
+│       ▼              ▼           │     │  └────────────────────────┘  │
+│  ┌───────────────────────┐       │     │                              │
+│  │ Controller MCU        │       │     │  Kết nối trực tiếp:          │
+│  │ (collect all sensors) │       │     │  ┌──────┐ ┌───────┐ ┌─────┐ │
+│  └───────────┬───────────┘       │     │  │Camera│ │Speaker│ │ Mic │ │
+│              │                   │     │  │(RTSP)│ │(audio)│ │(USB)│ │
+│              ▼                   │     │  └──────┘ └───────┘ └─────┘ │
+│  ┌───────────────────────┐       │     │                              │
+│  │ MQTT Publish          │       │     │                              │
+│  │ (sensor readings)     │──MQTT──────→│                              │
+│  └───────────────────────┘       │     │                              │
+└──────────────────────────────────┘     └─────────────────────────────┘
 ```
 
-### 4.2 Sensor Plugin
+### 4.2 Phân loại kết nối
+
+| Kết nối trực tiếp (Orange Pi) | Đọc qua MQTT (từ elevator controller) |
+|-------------------------------|---------------------------------------|
+| Camera IP (RTSP stream) | Nhiệt độ / Độ ẩm cabin |
+| Microphone (USB) | Rung lắc (vibration) |
+| Speaker (USB/3.5mm) | Trọng tải cabin (load cell) |
+| Display (HDMI / Web) | Trạng thái cửa (mở/đóng) |
+| | Tầng hiện tại |
+| | Tốc độ di chuyển |
+| | Lỗi/cảnh báo từ controller |
+
+### 4.3 Sensor Plugin (MQTT-based)
 
 ```python
 # edge/plugins/sensors/plugin.py
 
 class Plugin(ServicePlugin):
     """
-    Sensor monitoring service plugin.
+    Sensor data receiver plugin.
+
+    KHÔNG đọc sensor trực tiếp (không GPIO/I2C).
+    Subscribe MQTT topics từ bộ điều khiển thang máy,
+    parse data, publish lên EventBus nội bộ.
+
+    Flow:
+        Elevator Controller → MQTT → SensorPlugin → EventBus → Other plugins
     
-    - Reads configured sensors periodically
-    - Publishes sensor.reading events to EventBus
-    - Publishes sensor.alert events when thresholds exceeded
-    - Reports to cloud via MQTT (aggregated, not every reading)
+    Use cases:
+        - Display plugin: hiển thị nhiệt độ, tầng hiện tại
+        - Logging: ghi nhận sensor data cho analytics
+        - Alert: cảnh báo khi threshold vượt ngưỡng (quá nóng, quá tải)
     """
 
     @property
@@ -463,40 +469,141 @@ class Plugin(ServicePlugin):
 
     @property
     def subscribed_events(self) -> list[EventType]:
-        return []  # Sensors produce events, don't consume them
+        # Sensor plugin nhận data từ MQTT (không từ EventBus)
+        # Nhưng có thể subscribe system events để biết khi nào start/stop
+        return []
 
-    def start(self, config, event_bus) -> bool:
-        self._manager = SensorManager(config, event_bus)
-        self._manager.start()
+    def start(self, config: dict, event_bus: EventBus) -> bool:
+        self._event_bus = event_bus
+        self._config = config
+
+        # Subscribe MQTT topic từ elevator controller
+        # Topic format do đội elevator controller quy định
+        self._mqtt_topic = config.get("mqtt_topic", "elevator/sensor_data")
+        self._alert_thresholds = config.get("alert_thresholds", {})
+
+        # Đăng ký MQTT handler với CloudSync
+        # CloudSync sẽ forward message đến handler khi nhận được
+        self._register_mqtt_handler()
+
+        # Lưu latest readings (cache)
+        self._latest: dict[str, SensorReading] = {}
+
         return True
+
+    def _on_sensor_message(self, payload: dict) -> None:
+        """Xử lý message sensor từ elevator controller qua MQTT."""
+        reading = self._parse_reading(payload)
+        if reading is None:
+            return
+
+        # Cache latest
+        self._latest[reading.sensor_type.value] = reading
+
+        # Publish lên EventBus (cho display, logging, etc.)
+        self._event_bus.publish(SensorReadingEvent(
+            source=self.name,
+            sensor_type=reading.sensor_type,
+            value=reading.value,
+            unit=reading.unit,
+        ))
+
+        # Check alert thresholds
+        self._check_alert(reading)
+
+    def _parse_reading(self, payload: dict) -> SensorReading | None:
+        """Parse MQTT payload → SensorReading. Format TBD by controller team."""
+        # Payload format sẽ được xác định khi có spec từ elevator controller
+        ...
+
+    def _check_alert(self, reading: SensorReading) -> None:
+        """Nếu giá trị vượt threshold → publish alert event."""
+        threshold = self._alert_thresholds.get(reading.sensor_type.value)
+        if threshold and reading.value > threshold:
+            self._event_bus.publish(SensorAlertEvent(
+                source=self.name,
+                sensor_type=reading.sensor_type,
+                value=reading.value,
+                threshold=threshold,
+            ))
+
+    def get_latest(self, sensor_type: str) -> SensorReading | None:
+        """Get latest cached reading for a sensor type."""
+        return self._latest.get(sensor_type)
+
+    def stop(self) -> None:
+        self._latest.clear()
 ```
 
-### 4.3 Sensor Events
+### 4.4 Data Models
+
+```python
+class SensorType(str, Enum):
+    TEMPERATURE = "temperature"
+    HUMIDITY = "humidity"
+    VIBRATION = "vibration"
+    LOAD = "load"                   # Trọng tải cabin (kg)
+    DOOR_STATE = "door_state"       # open/closed
+    CURRENT_FLOOR = "current_floor" # Tầng hiện tại
+    SPEED = "speed"                 # Tốc độ di chuyển
+    ERROR_CODE = "error_code"       # Mã lỗi từ controller
+
+class SensorReading(BaseModel):
+    sensor_type: SensorType
+    value: float
+    unit: str                       # "°C", "%", "g", "kg", "m/s", "floor"
+    timestamp: datetime
+    metadata: dict = {}
+```
+
+### 4.5 Sensor Events
 
 ```python
 # Thêm vào shared/event_schemas.py
 
 class EventType(str, Enum):
     # ... existing events ...
-    
+
     # Sensor events (Phase 3)
     SENSOR_READING = "sensor.reading"
     SENSOR_ALERT = "sensor.alert"
-    CABIN_WEIGHT_CHANGED = "sensor.weight_changed"
     CABIN_DOOR_OPENED = "sensor.door_opened"
     CABIN_DOOR_CLOSED = "sensor.door_closed"
-    CABIN_MOTION_DETECTED = "sensor.motion_detected"
+    CABIN_FLOOR_CHANGED = "sensor.floor_changed"
+    CABIN_OVERLOAD = "sensor.overload"
 ```
 
-### 4.4 MQTT Topics — Sensors
+### 4.6 MQTT — Sensor Data (từ Elevator Controller)
 
 ```
+# Elevator Controller → Smart Cabin Edge (subscribe)
+# Topic & payload format: TBD by elevator controller team
+# Placeholder:
+
+elevator/sensor_data    → {"type": "temperature", "value": 28.5, "unit": "°C", "ts": 1723...}
+elevator/sensor_data    → {"type": "load", "value": 320, "unit": "kg", "ts": 1723...}
+elevator/sensor_data    → {"type": "door_state", "value": "open", "ts": 1723...}
+elevator/sensor_data    → {"type": "current_floor", "value": 5, "ts": 1723...}
+elevator/sensor_data    → {"type": "vibration", "rms": 0.02, "peak": 0.1, "ts": 1723...}
+
+# Smart Cabin Edge → Cloud (publish, forwarded from controller data)
 cabin/{device_id}/sensor/temperature     → {"value": 28.5, "unit": "°C"}
-cabin/{device_id}/sensor/humidity        → {"value": 65, "unit": "%"}
-cabin/{device_id}/sensor/vibration       → {"rms": 0.02, "peak": 0.1, "unit": "g"}
-cabin/{device_id}/sensor/air_quality     → {"co2_eq": 450, "tvoc": 12, "unit": "ppm"}
-cabin/{device_id}/sensor/weight          → {"value": 320, "unit": "kg", "persons_est": 4}
 cabin/{device_id}/sensor/alert           → {"sensor": "temperature", "value": 42, "threshold": 40}
+```
+
+### 4.7 Config
+
+```yaml
+- name: "sensors"
+  enabled: false
+  config:
+    mqtt_topic: "elevator/sensor_data"    # Topic subscribe từ elevator controller
+    alert_thresholds:
+      temperature: 40       # °C
+      load: 800             # kg (quá tải)
+      vibration: 0.5        # g-force
+    forward_to_cloud: true  # Forward readings lên cloud MQTT
+    forward_interval: 30    # Mỗi 30s forward 1 lần (không spam)
 ```
 
 ---
@@ -511,13 +618,13 @@ cabin/{device_id}/sensor/alert           → {"sensor": "temperature", "value": 
 class AudioManager:
     """
     Manages audio output: TTS greetings, notification sounds, alarms.
-    
+  
     Components:
     - TTS Engine: pyttsx3 (offline) or edge-tts (Microsoft, online)
     - Sound Player: pygame.mixer or aplay
     - Volume Control: ALSA mixer
     - Queue: Priority-based audio queue (alarm > greeting > notification)
-    
+  
     Design:
     - Non-blocking: audio plays in background thread
     - Priority queue: urgent sounds interrupt lower-priority
@@ -534,7 +641,7 @@ class AudioManager:
 class AudioPlugin(ServicePlugin):
     """
     Audio service plugin.
-    
+  
     Subscribes to:
     - face.recognized → "Xin chào {person_name}"
     - sensor.alert → alarm sound
@@ -558,12 +665,12 @@ class AudioPlugin(ServicePlugin):
 
 ### 5.2 TTS Options
 
-| Engine | Offline | Quality | Latency | Vietnamese |
-|--------|---------|---------|---------|-----------|
-| pyttsx3 (espeak) | Yes | Low-Medium | <100ms | OK |
-| edge-tts (Microsoft) | No (online) | High | 200-500ms | Excellent |
-| Piper TTS | Yes | High | 100-300ms | Community models |
-| gTTS | No (online) | Medium | 300-500ms | Good |
+| Engine               | Offline     | Quality    | Latency   | Vietnamese       |
+| -------------------- | ----------- | ---------- | --------- | ---------------- |
+| pyttsx3 (espeak)     | Yes         | Low-Medium | <100ms    | OK               |
+| edge-tts (Microsoft) | No (online) | High       | 200-500ms | Excellent        |
+| Piper TTS            | Yes         | High       | 100-300ms | Community models |
+| gTTS                 | No (online) | Medium     | 300-500ms | Good             |
 
 **Recommendation**: `edge-tts` cho chất lượng tốt nhất (Vietnamese), fallback `pyttsx3` khi offline.
 
@@ -574,6 +681,7 @@ class AudioPlugin(ServicePlugin):
 ### 6.1 Concept
 
 Khi người dùng bước vào cabin thang máy:
+
 1. Camera nhận diện khuôn mặt → xác định person_id
 2. Lookup `default_floor` từ face database
 3. Gửi lệnh chọn tầng qua **MQTT** đến bộ điều khiển thang máy
@@ -587,20 +695,20 @@ Khi người dùng bước vào cabin thang máy:
 class ElevatorPlugin(ServicePlugin):
     """
     Auto Floor Call plugin.
-    
+  
     Flow:
         face.recognized → lookup default_floor → publish MQTT floor call
-    
+  
     Multi-person support:
         - Track all recognized persons in cabin (via face tracker)
         - Call floor for each person as they are identified
         - Dedup: same person → same floor, don't call twice
-    
+  
     Communication:
         - Floor call sent via MQTT (payload format configurable)
         - Topic: configured in plugin config (e.g., "elevator/floor_call")
         - Payload: JSON (format provided by elevator controller team)
-    
+  
     Safety:
         - Only calls if person has registered default_floor
         - Confidence must exceed elevator_threshold (0.75)
@@ -766,6 +874,7 @@ elevator/floor_call
 ### 6.9 Display Integration
 
 Khi Elevator Plugin gọi tầng, nó cũng publish `FLOOR_REQUESTED` event → Display Plugin subscribe và hiển thị:
+
 - Single person: "Xin chào anh Sy — Tầng 8"
 - Multi-person: "Tầng 8 (Sy), Tầng 3 (Ngọc Cần)"
 
@@ -1004,20 +1113,13 @@ plugins:
     - name: "sensors"
       enabled: false
       config:
-        poll_interval: 10               # Seconds between readings
-        sensors:
-          - type: "temperature"
-            bus: "i2c"
-            address: 0x44               # SHT30
-            alert_threshold: 40
-          - type: "vibration"
-            bus: "i2c"
-            address: 0x53               # ADXL345
-            alert_threshold: 0.5        # g-force
-          - type: "air_quality"
-            bus: "i2c"
-            address: 0x58               # SGP30
-            alert_threshold: 1000       # CO2 eq ppm
+        mqtt_topic: "elevator/sensor_data"  # Subscribe từ elevator controller
+        alert_thresholds:
+          temperature: 40           # °C
+          load: 800                 # kg (quá tải)
+          vibration: 0.5            # g-force
+        forward_to_cloud: true      # Forward readings lên cloud
+        forward_interval: 30        # Mỗi 30s forward 1 lần
 
     - name: "elevator"
       enabled: false
@@ -1058,16 +1160,12 @@ class DisplayConfig(BaseModel):
     port: int = 8081
     layout: str = "standard_3zone"
 
-class SensorEntry(BaseModel):
-    type: str
-    bus: str = "i2c"
-    address: int = 0
-    alert_threshold: float = 0
-
 class SensorsConfig(BaseModel):
     enabled: bool = False
-    poll_interval: int = 10
-    sensors: list[SensorEntry] = []
+    mqtt_topic: str = "elevator/sensor_data"
+    alert_thresholds: dict[str, float] = {}
+    forward_to_cloud: bool = True
+    forward_interval: int = 30
 
 class AudioConfig(BaseModel):
     enabled: bool = False
@@ -1110,9 +1208,7 @@ smart-cabin/
 │   │   ├── service_plugin.py         # NEW: ServicePlugin abstract base
 │   │   ├── cloud_sync.py             # Updated: forward new event types
 │   │   ├── logging_setup.py          # Unchanged
-│   │   ├── sensor_manager.py         # NEW: hardware sensor abstraction
-│   │   ├── audio_manager.py          # NEW: TTS + sound playback
-│   │   └── relay_controller.py       # NEW: GPIO relay control
+│   │   └── audio_manager.py          # NEW: TTS + sound playback (Speaker/Mic trực tiếp)
 │   │
 │   ├── plugins/
 │   │   ├── face_recognition/         # Unchanged (FramePlugin)
@@ -1136,19 +1232,15 @@ smart-cabin/
 │   │   │       ├── display.js
 │   │   │       └── display.css
 │   │   │
+│   │   ├── elevator/                 # NEW (ServicePlugin, Phase 2)
+│   │   │   └── plugin.py            # Auto Floor Call via MQTT
+│   │   │
 │   │   ├── audio/                    # NEW (ServicePlugin, Phase 3)
 │   │   │   ├── plugin.py
 │   │   │   └── tts.py
 │   │   │
 │   │   ├── sensors/                  # NEW (ServicePlugin, Phase 3)
-│   │   │   ├── plugin.py
-│   │   │   └── drivers/
-│   │   │       ├── dht22.py
-│   │   │       ├── adxl345.py
-│   │   │       └── sgp30.py
-│   │   │
-│   │   ├── elevator/                 # NEW (ServicePlugin, Phase 4)
-│   │   │   └── plugin.py
+│   │   │   └── plugin.py            # MQTT subscriber (data from elevator controller)
 │   │   │
 │   │   └── dummy/                    # Unchanged
 │   │       └── plugin.py
@@ -1239,13 +1331,13 @@ smart-cabin/
 
 ### Zero Breaking Changes Guarantee
 
-| What | Why it's safe |
-|------|---------------|
-| BasePlugin interface | Untouched. face_recognition vẫn dùng nó. |
-| EventBus | Generic. Accepts any BaseEvent subclass. New events just work. |
-| Config loading | New sections optional (default_factory). Old configs valid. |
-| MQTT topics | Additive. Existing topics unchanged. |
-| Plugin loading | Auto-detect type from class hierarchy. Old plugins = FramePlugin. |
+| What                 | Why it's safe                                                     |
+| -------------------- | ----------------------------------------------------------------- |
+| BasePlugin interface | Untouched. face_recognition vẫn dùng nó.                       |
+| EventBus             | Generic. Accepts any BaseEvent subclass. New events just work.    |
+| Config loading       | New sections optional (default_factory). Old configs valid.       |
+| MQTT topics          | Additive. Existing topics unchanged.                              |
+| Plugin loading       | Auto-detect type from class hierarchy. Old plugins = FramePlugin. |
 
 ---
 
@@ -1253,53 +1345,54 @@ smart-cabin/
 
 ### 12.1 Display Security
 
-| Threat | Mitigation |
-|--------|-----------|
-| XSS in content | Sanitize HTML content before rendering. CSP headers on web display. |
-| Unauthorized content push | MQTT auth required. Content validation before display. |
-| Display hijacking | WebSocket auth token. Display client on local network only. |
-| Inappropriate content | Content moderation rules. Admin approval for user-uploaded content. |
+| Threat                    | Mitigation                                                          |
+| ------------------------- | ------------------------------------------------------------------- |
+| XSS in content            | Sanitize HTML content before rendering. CSP headers on web display. |
+| Unauthorized content push | MQTT auth required. Content validation before display.              |
+| Display hijacking         | WebSocket auth token. Display client on local network only.         |
+| Inappropriate content     | Content moderation rules. Admin approval for user-uploaded content. |
 
-### 12.2 Relay/Elevator Security
+### 12.2 Elevator / MQTT Security
 
-| Threat | Mitigation |
-|--------|-----------|
-| Unauthorized floor access | High confidence threshold (0.75). Person must have floor mapping. |
-| Replay attack | Timestamp validation. Fresh face detection required. |
-| Relay stuck ON | Hardware timeout (5s max). Watchdog timer. |
-| GPIO manipulation | Physical enclosure. Tamper detection sensor. |
+| Threat                    | Mitigation                                                        |
+| ------------------------- | ----------------------------------------------------------------- |
+| Unauthorized floor call   | High confidence threshold (0.75). Person must have floor mapping. |
+| MQTT topic spoofing       | MQTT auth (username/password). Topic ACL on broker.               |
+| Replay attack             | Timestamp validation. Fresh face detection required.              |
+| Flood attack on elevator  | Cooldown per person (30s). Rate limit on MQTT publishes.          |
 
 ### 12.3 Network Security
 
-| Threat | Mitigation |
-|--------|-----------|
-| MQTT sniffing | TLS encryption. Username/password auth. |
-| REST API abuse | API key/token auth. Rate limiting. |
+| Threat                | Mitigation                                |
+| --------------------- | ----------------------------------------- |
+| MQTT sniffing         | TLS encryption. Username/password auth.   |
+| REST API abuse        | API key/token auth. Rate limiting.        |
 | Local network attacks | Display on isolated VLAN. Firewall rules. |
 
 ---
 
 ## 13. Performance Budget (Orange Pi 4 Pro)
 
-| Resource | Budget | Current Usage | After v2 (Display) |
-|----------|--------|---------------|---------------------|
-| CPU (6 cores) | 100% | ~25% (camera + face) | ~35% (+display server) |
-| RAM (4GB) | 4096 MB | ~512 MB | ~700 MB (+content cache) |
-| Storage | 128GB USB | ~2 GB (models + data) | ~5 GB (+media content) |
-| Network (local) | 100 Mbps | ~2 Mbps (RTSP) | ~5 Mbps (+display WebSocket) |
-| GPU (Mali-T860) | Available | Unused | Unused (CPU sufficient) |
+| Resource        | Budget    | Current Usage         | After v2 (Display)           |
+| --------------- | --------- | --------------------- | ---------------------------- |
+| CPU (6 cores)   | 100%      | ~25% (camera + face)  | ~35% (+display server)       |
+| RAM (4GB)       | 4096 MB   | ~512 MB               | ~700 MB (+content cache)     |
+| Storage         | 128GB USB | ~2 GB (models + data) | ~5 GB (+media content)       |
+| Network (local) | 100 Mbps  | ~2 Mbps (RTSP)        | ~5 Mbps (+display WebSocket) |
+| GPU (Mali-T860) | Available | Unused                | Unused (CPU sufficient)      |
 
 ### Per-Subsystem CPU Estimate
 
-| Subsystem | CPU Usage | Notes |
-|-----------|-----------|-------|
-| Video Pipeline | 5-8% | RTSP decode + distribute |
-| Face Recognition | 15-20% | Detection + embedding (~200ms/frame at 5fps) |
-| Display Server | 3-5% | FastAPI + WebSocket (mostly idle, spike on content push) |
-| Sensor Polling | 1-2% | I2C reads every 10s |
-| Audio (TTS) | 5-10% (burst) | Only when speaking, idle otherwise |
-| MQTT + EventBus | 1-2% | Lightweight messaging |
-| **Total** | **~35-45%** | **Comfortable headroom** |
+| Subsystem        | CPU Usage         | Notes                                                    |
+| ---------------- | ----------------- | -------------------------------------------------------- |
+| Video Pipeline   | 5-8%              | RTSP decode + distribute                                 |
+| Face Recognition | 15-20%            | Detection + embedding (~200ms/frame at 5fps)             |
+| Display Server   | 3-5%              | FastAPI + WebSocket (mostly idle, spike on content push) |
+| Sensor Plugin    | <1%               | MQTT subscribe + parse (no hardware polling)             |
+| Audio (TTS)      | 5-10% (burst)     | Only when speaking, idle otherwise                       |
+| Elevator Plugin  | <1%               | Event handler + MQTT publish                             |
+| MQTT + EventBus  | 1-2%              | Lightweight messaging                                    |
+| **Total**  | **~30-40%** | **Comfortable headroom**                           |
 
 ---
 
@@ -1364,6 +1457,7 @@ smart-cabin/
 **Decision**: Create separate `ServicePlugin` class instead of making `process_frame()` optional in `BasePlugin`.
 
 **Rationale**:
+
 - Clear separation of concerns (frame-driven vs event-driven)
 - No confusion about when process_frame is called or not
 - Each type has appropriate lifecycle methods
@@ -1375,6 +1469,7 @@ smart-cabin/
 **Decision**: Primary display backend is web-based (FastAPI + WebSocket + Browser).
 
 **Rationale**:
+
 - Hardware agnostic: any device with browser works (tablet, TV, laptop for PoC)
 - Easy to develop and iterate (HTML/CSS/JS, hot-reload friendly)
 - Multiple displays from one server (multi-screen support free)
@@ -1386,6 +1481,7 @@ smart-cabin/
 **Decision**: Content stored locally on edge device (SQLite + file system), synced from cloud.
 
 **Rationale**:
+
 - Offline-first: display works without cloud connection
 - Low latency: no network round-trip for content resolution
 - Privacy: personal content rules stored locally
@@ -1396,6 +1492,7 @@ smart-cabin/
 **Decision**: Phase 2 personalizes by `person_id` (exact match from face recognition). Demographic-based targeting (age, gender) deferred to Phase 3+.
 
 **Rationale**:
+
 - person_id matching is already working (face recognition done)
 - Demographic estimation requires additional AI models (not built yet)
 - Simpler to implement and validate in PoC

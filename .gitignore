@@ -32,7 +32,6 @@ edge/plugins/face_recognition/models/*.param
 # Training data (collected locally)
 data/
 edge/data/
-images/
 
 # Build artifacts
 edge/inference/build/
