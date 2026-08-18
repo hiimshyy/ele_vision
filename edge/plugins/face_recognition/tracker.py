@@ -207,14 +207,23 @@ class Track:
         return [int(x1), int(y1), int(x2 - x1), int(y2 - y1)]
 
     def predict(self) -> tuple[float, float, float, float]:
-        """Kalman predict next position."""
-        return self._kalman.predict()
+        """Kalman predict next position. Updates internal predicted bbox for matching."""
+        predicted = self._kalman.predict()
+        # Store predicted bbox for IoU matching (not for display)
+        self._predicted_bbox = predicted
+        return predicted
+
+    @property
+    def predicted_bbox(self) -> tuple[float, float, float, float]:
+        """Kalman-predicted bbox (used for IoU matching)."""
+        return getattr(self, "_predicted_bbox", self.bbox)
 
     def update_bbox(self, bbox: tuple[float, float, float, float],
                     landmarks: np.ndarray, confidence: float, frame_id: int) -> None:
         """Update track with new detection (Kalman update + state)."""
         self._kalman.update(bbox)
-        self.bbox = self._kalman.get_state_bbox()
+        # Use detector bbox directly for display (smooth but responsive)
+        self.bbox = bbox
         self.landmarks = landmarks
         self.confidence = confidence
         self.state = TrackState.ACTIVE
@@ -256,7 +265,8 @@ def compute_iou_matrix(detections: list[tuple], tracks: list[Track]) -> np.ndarr
 
     for i, det_bbox in enumerate(detections):
         for j, track in enumerate(tracks):
-            iou_matrix[i, j] = compute_iou(det_bbox, track.bbox)
+            # Use Kalman-predicted bbox for matching (better association)
+            iou_matrix[i, j] = compute_iou(det_bbox, track.predicted_bbox)
 
     return iou_matrix
 
@@ -319,7 +329,7 @@ class FaceTracker:
     """
 
     def __init__(self,
-                 high_threshold: float = 0.6,
+                 high_threshold: float = 0.5,
                  low_threshold: float = 0.3,
                  iou_threshold: float = 0.4,
                  max_lost: int = 15,
